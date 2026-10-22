@@ -100,7 +100,13 @@ class Game(private val prefs: SharedPreferences) {
         lock(); return true
     }
 
-    fun softDrop() { if (state == GState.PLAYING && !step()) score += 1 }
+    /** Descend d'une ligne sans verrouiller (le verrouillage reste géré par la gravité). */
+    fun softDrop() {
+        val p = piece ?: return
+        if (state != GState.PLAYING) return
+        val q = p.copy(y = p.y + 1)
+        if (fits(q)) { piece = q; score += 1 }
+    }
 
     fun ghost(): Piece? {
         var p = piece ?: return null

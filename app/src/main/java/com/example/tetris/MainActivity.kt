@@ -80,20 +80,31 @@ fun TetrisApp() {
                     BoardView(game, t)
                 }
                 Column(Modifier.width(92.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Preview("RÉSERVE", game.hold, t)
+                    Preview("RÉSERVE", game.hold, t) { game.holdPiece() }
                     Preview("SUIVANT", game.next, t)
                     Stat("RECORD", game.best.toString(), t, Modifier.fillMaxWidth())
                     Spacer(Modifier.weight(1f))
                     CtrlButton("II", t, Modifier.fillMaxWidth()) { game.pause() }
                 }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CtrlButton("RÉSERVE", t, Modifier.weight(1.3f), fs = 11) { game.holdPiece() }
-                CtrlButton("◀", t, Modifier.weight(1f), repeat = true) { game.move(-1) }
-                CtrlButton("▶", t, Modifier.weight(1f), repeat = true) { game.move(1) }
-                CtrlButton("↻", t, Modifier.weight(1f)) { game.rotate() }
-                CtrlButton("▼", t, Modifier.weight(1f), repeat = true) { game.softDrop() }
-                CtrlButton("⇩", t, Modifier.weight(1f)) { game.hardDrop() }
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CtrlButton("◀", t, Modifier.weight(1f), repeat = true, h = 76) { game.move(-1) }
+                        CtrlButton("▶", t, Modifier.weight(1f), repeat = true, h = 76) { game.move(1) }
+                    }
+                    CtrlButton("▼", t, Modifier.fillMaxWidth(), repeat = true) { game.softDrop() }
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CtrlButton("↻", t, Modifier.weight(1f), h = 76) { game.rotate() }
+                        CtrlButton("⇩", t, Modifier.weight(1f), h = 76) { game.hardDrop() }
+                    }
+                    CtrlButton("RÉSERVE", t, Modifier.fillMaxWidth(), fs = 13) { game.holdPiece() }
+                }
             }
         }
 
@@ -156,7 +167,6 @@ fun BoardView(game: Game, t: Theme) {
         Modifier.aspectRatio(COLS / ROWS.toFloat(), matchHeightConstraintsFirst = true)
             .clip(RoundedCornerShape(12.dp)).background(t.board)
             .border(2.dp, t.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-            .pointerInput(Unit) { detectTapGestures { game.rotate() } },
     ) {
         val s = size.width / COLS
         for (i in 1 until COLS) drawLine(t.grid, Offset(i * s, 0f), Offset(i * s, size.height))
@@ -185,8 +195,8 @@ fun Stat(label: String, value: String, t: Theme, modifier: Modifier) {
 }
 
 @Composable
-fun Preview(title: String, type: Int, t: Theme) {
-    Panel(t, Modifier.fillMaxWidth()) {
+fun Preview(title: String, type: Int, t: Theme, onClick: (() -> Unit)? = null) {
+    Panel(t, Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
         Text(title, color = t.text.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
         Canvas(Modifier.fillMaxWidth().aspectRatio(1f)) {
             if (type < 0) return@Canvas
@@ -202,14 +212,14 @@ fun Preview(title: String, type: Int, t: Theme) {
 }
 
 @Composable
-fun CtrlButton(label: String, t: Theme, modifier: Modifier, repeat: Boolean = false, fs: Int = 22, action: () -> Unit) {
+fun CtrlButton(label: String, t: Theme, modifier: Modifier, repeat: Boolean = false, fs: Int = 22, h: Int = 58, action: () -> Unit) {
     val scope = rememberCoroutineScope()
     val act by rememberUpdatedState(action)
     Box(
-        modifier.height(58.dp).clip(RoundedCornerShape(16.dp)).background(t.panel).pointerInput(repeat) {
+        modifier.height(h.dp).clip(RoundedCornerShape(16.dp)).background(t.panel).pointerInput(repeat) {
             detectTapGestures(onPress = {
                 act()
-                val job = if (repeat) scope.launch { delay(170); while (true) { act(); delay(55) } } else null
+                val job = if (repeat) scope.launch { delay(150); while (true) { act(); delay(45) } } else null
                 tryAwaitRelease()
                 job?.cancel()
             })
@@ -217,3 +227,4 @@ fun CtrlButton(label: String, t: Theme, modifier: Modifier, repeat: Boolean = fa
         contentAlignment = Alignment.Center,
     ) { Text(label, color = t.text, fontSize = fs.sp, fontWeight = FontWeight.Bold) }
 }
+
