@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +68,7 @@ fun TetrisApp() {
     var style by remember { mutableIntStateOf(prefs.getInt("style", 0).coerceIn(0, STYLES.lastIndex)) }
     var arrow by remember { mutableFloatStateOf(prefs.getFloat("arrow", 1f)) }   // taille des flèches (x1)
     var rshift by remember { mutableFloatStateOf(prefs.getFloat("rshift", 0f)) } // décalage de la flèche droite (dp)
+    var lshift by remember { mutableFloatStateOf(prefs.getFloat("lshift", 0f)) } // décalage de la flèche gauche vers le bouton de rotation (dp)
     var showSettings by remember { mutableStateOf(false) }
     val zoneH = maxOf(150f, 140f * arrow + 14f)
     val t = THEMES[themeIdx]
@@ -116,13 +118,9 @@ fun TetrisApp() {
                     .background(if (t.wood) Color(0xFFDDBB8E) else Color.Black.copy(alpha = 0.22f))
                     .navigationBarsPadding().height(zoneH.dp + lift.dp),
             ) {
-                Row(
-                    Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp + lift.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (!mirror) { MoveCluster(game, t, arrow, rshift); RotateButton(game, t) }
-                    else { RotateButton(game, t); MoveCluster(game, t, arrow, rshift) }
+                BoxWithConstraints(Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp + lift.dp)) {
+                    RotateButton(game, t, Modifier.align(if (mirror) Alignment.CenterStart else Alignment.CenterEnd))
+                    MoveCluster(game, t, arrow, rshift, lshift, mirror, maxWidth.value, Modifier.align(Alignment.CenterStart))
                 }
             }
         }
@@ -136,6 +134,7 @@ fun TetrisApp() {
                     style, { style = it; prefs.edit().putInt("style", it).apply() },
                     arrow, { arrow = it }, { prefs.edit().putFloat("arrow", arrow).apply() },
                     rshift, { rshift = it }, { prefs.edit().putFloat("rshift", rshift).apply() },
+                    lshift, { lshift = it }, { prefs.edit().putFloat("lshift", lshift).apply() },
                     { showSettings = false },
                 )
             } else {
@@ -378,19 +377,27 @@ fun WoodButton(kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false
     }
 }
 
+/**
+ * Flèches positionnées librement (en dp) dans la zone des pouces.
+ * lshift déplace ◀ vers le bouton de rotation, jusqu'à le toucher ; shift écarte ▶ de ▼.
+ */
 @Composable
-fun MoveCluster(game: Game, t: Theme, scale: Float, shift: Float) {
+fun MoveCluster(game: Game, t: Theme, scale: Float, shift: Float, lshift: Float, mirror: Boolean, w: Float, modifier: Modifier) {
     val aw = 76f * scale; val ah = 66f * scale; val gap = 20f * scale; val vgap = 8f * scale
-    Box(Modifier.width((2 * aw + gap + shift).dp).height((2 * ah + vgap).dp)) {
-        WoodButton(Kind.LEFT, t, Modifier.size(aw.dp, ah.dp), repeat = true) { game.move(-1) }
-        WoodButton(Kind.RIGHT, t, Modifier.offset((aw + gap + shift).dp, 0.dp).size(aw.dp, ah.dp), repeat = true) { game.move(1) }
-        WoodButton(Kind.DOWN, t, Modifier.offset((aw / 2 + gap / 2).dp, (ah + vgap).dp).size(aw.dp, ah.dp), repeat = true) { game.softDrop() }
+    val base = if (mirror) w - (2 * aw + gap + shift) else 0f
+    val xL = (base + (if (mirror) -lshift else lshift)).coerceIn(0f, maxOf(0f, w - aw))
+    val xR = base + aw + gap + shift
+    val xD = base + aw / 2 + gap / 2
+    Box(modifier.fillMaxWidth().height((2 * ah + vgap).dp)) {
+        WoodButton(Kind.LEFT, t, Modifier.offset(xL.dp, 0.dp).size(aw.dp, ah.dp), repeat = true) { game.move(-1) }
+        WoodButton(Kind.RIGHT, t, Modifier.offset(xR.dp, 0.dp).size(aw.dp, ah.dp), repeat = true) { game.move(1) }
+        WoodButton(Kind.DOWN, t, Modifier.offset(xD.dp, (ah + vgap).dp).size(aw.dp, ah.dp), repeat = true) { game.softDrop() }
     }
 }
 
 @Composable
-fun RotateButton(game: Game, t: Theme) {
-    WoodButton(Kind.ROTATE, t, Modifier.size(116.dp)) { game.rotate() }
+fun RotateButton(game: Game, t: Theme, modifier: Modifier) {
+    WoodButton(Kind.ROTATE, t, modifier.size(116.dp)) { game.rotate() }
 }
 
 // ---------- menu de réglages ----------
@@ -404,9 +411,11 @@ fun SettingsPanel(
     style: Int, onStyle: (Int) -> Unit,
     arrow: Float, onArrow: (Float) -> Unit, onArrowDone: () -> Unit,
     rshift: Float, onRshift: (Float) -> Unit, onRshiftDone: () -> Unit,
+    lshift: Float, onLshift: (Float) -> Unit, onLshiftDone: () -> Unit,
     onClose: () -> Unit,
 ) {
     // Le panneau reste en haut : on voit les boutons bouger en bas pendant le réglage.
+    val maxL = (LocalConfiguration.current.screenWidthDp - 24f - 116f - 8f - 76f * arrow).coerceAtLeast(1f)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         Column(
             Modifier.statusBarsPadding().padding(12.dp).fillMaxWidth().heightIn(max = maxHeight * 0.62f)
@@ -417,6 +426,7 @@ fun SettingsPanel(
             Text("RÉGLAGES", color = t.accent, fontSize = 24.sp, fontWeight = FontWeight.Black)
             SettingSlider("Hauteur des boutons : " + lift.toInt() + " dp depuis le bas", lift, 0f..140f, t, onLift, onLiftDone)
             SettingSlider("Taille des flèches : " + (arrow * 100).toInt() + " %", arrow, 0.7f..1.5f, t, onArrow, onArrowDone)
+            SettingSlider("Flèche gauche, vers le bouton de rotation : " + lshift.toInt() + " dp", lshift.coerceIn(0f, maxL), 0f..maxL, t, onLshift, onLshiftDone)
             SettingSlider("Décalage de la flèche droite : " + rshift.toInt() + " dp", rshift, 0f..60f, t, onRshift, onRshiftDone)
             Label("Disposition", t)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
