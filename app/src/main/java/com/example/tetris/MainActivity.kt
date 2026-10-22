@@ -28,9 +28,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -64,7 +65,10 @@ fun TetrisApp() {
     var mirror by remember { mutableStateOf(prefs.getBoolean("mirror", false)) } // true = rotation à gauche, flèches à droite
     var lift by remember { mutableFloatStateOf(prefs.getFloat("lift", 60f)) } // décalage des boutons depuis le bas (dp)
     var style by remember { mutableIntStateOf(prefs.getInt("style", 0).coerceIn(0, STYLES.lastIndex)) }
+    var arrow by remember { mutableFloatStateOf(prefs.getFloat("arrow", 1f)) }   // taille des flèches (x1)
+    var rshift by remember { mutableFloatStateOf(prefs.getFloat("rshift", 0f)) } // décalage de la flèche droite (dp)
     var showSettings by remember { mutableStateOf(false) }
+    val zoneH = maxOf(150f, 140f * arrow + 14f)
     val t = THEMES[themeIdx]
     val haptic = LocalHapticFeedback.current
 
@@ -110,15 +114,15 @@ fun TetrisApp() {
             Box(
                 Modifier.fillMaxWidth()
                     .background(if (t.wood) Color(0xFFDDBB8E) else Color.Black.copy(alpha = 0.22f))
-                    .navigationBarsPadding().height(150.dp + lift.dp),
+                    .navigationBarsPadding().height(zoneH.dp + lift.dp),
             ) {
                 Row(
                     Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp + lift.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (!mirror) { MoveCluster(game, t); RotateButton(game, t) }
-                    else { RotateButton(game, t); MoveCluster(game, t) }
+                    if (!mirror) { MoveCluster(game, t, arrow, rshift); RotateButton(game, t) }
+                    else { RotateButton(game, t); MoveCluster(game, t, arrow, rshift) }
                 }
             }
         }
@@ -130,6 +134,8 @@ fun TetrisApp() {
                     mirror, { mirror = it; prefs.edit().putBoolean("mirror", it).apply() },
                     themeIdx, { themeIdx = it; prefs.edit().putInt("theme", it).apply() },
                     style, { style = it; prefs.edit().putInt("style", it).apply() },
+                    arrow, { arrow = it }, { prefs.edit().putFloat("arrow", arrow).apply() },
+                    rshift, { rshift = it }, { prefs.edit().putFloat("rshift", rshift).apply() },
                     { showSettings = false },
                 )
             } else {
@@ -295,8 +301,6 @@ fun Chip(label: String, selected: Boolean, t: Theme, onClick: () -> Unit) {
 
 // ---------- boutons style « bois » ----------
 
-private val RIM = Brush.verticalGradient(listOf(Color(0xFFF2F2F2), Color(0xFF858585)))
-
 private fun btnBrush(c: Color, pressed: Boolean): Brush = Brush.verticalGradient(
     listOf(lerp(c, Color.White, 0.25f), lerp(c, Color.Black, 0.3f)).map { if (pressed) lerp(it, Color.Black, 0.25f) else it },
 )
@@ -306,7 +310,7 @@ fun WoodPill(label: String, t: Theme, modifier: Modifier, shape: Shape = Rounded
     val act by rememberUpdatedState(action)
     var pressed by remember { mutableStateOf(false) }
     Box(
-        modifier.clip(shape).background(RIM).padding(3.dp).clip(shape).background(btnBrush(t.btn, pressed))
+        modifier.clip(shape).background(btnBrush(t.btn, pressed)).border(1.5.dp, Color.White.copy(alpha = 0.35f), shape)
             .pointerInput(Unit) { detectTapGestures(onPress = { pressed = true; act(); tryAwaitRelease(); pressed = false }) },
         contentAlignment = Alignment.Center,
     ) { Text(label, color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp) }
@@ -314,7 +318,7 @@ fun WoodPill(label: String, t: Theme, modifier: Modifier, shape: Shape = Rounded
 
 enum class Kind { LEFT, RIGHT, DOWN, ROTATE }
 
-/** Bouton dessiné au Canvas : flèches hexagonales, flèche du bas en « maison », gros bouton rond de rotation. */
+/** Boutons « touches » modernes : coins arrondis, dégradé, reflet, ombre portée et chevrons épais. */
 @Composable
 fun WoodButton(kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false, action: () -> Unit) {
     val scope = rememberCoroutineScope()
@@ -334,60 +338,53 @@ fun WoodButton(kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false
     ) {
         val w = size.width
         val h = size.height
-        val shape = Path()
-        when (kind) {
-            Kind.LEFT -> { shape.moveTo(0f, h / 2); shape.lineTo(w * 0.28f, 0f); shape.lineTo(w, 0f); shape.lineTo(w, h); shape.lineTo(w * 0.28f, h); shape.close() }
-            Kind.RIGHT -> { shape.moveTo(w, h / 2); shape.lineTo(w * 0.72f, 0f); shape.lineTo(0f, 0f); shape.lineTo(0f, h); shape.lineTo(w * 0.72f, h); shape.close() }
-            Kind.DOWN -> { shape.moveTo(w / 2, 0f); shape.lineTo(w, h * 0.28f); shape.lineTo(w, h); shape.lineTo(0f, h); shape.lineTo(0f, h * 0.28f); shape.close() }
-            Kind.ROTATE -> shape.addOval(Rect(0f, 0f, w, h))
-        }
-        drawPath(shape, RIM)
-        scale(0.88f) { drawPath(shape, btnBrush(t.btn, pressed)) }
-        val white = Color.White
-        when (kind) {
-            Kind.LEFT -> {
-                val cx = w * 0.55f; val cy = h / 2; val s = h * 0.26f
-                val p = Path()
-                p.moveTo(cx - s, cy); p.lineTo(cx + s * 0.8f, cy - s); p.lineTo(cx + s * 0.8f, cy + s); p.close()
-                drawPath(p, white)
-            }
-            Kind.RIGHT -> {
-                val cx = w * 0.45f; val cy = h / 2; val s = h * 0.26f
-                val p = Path()
-                p.moveTo(cx + s, cy); p.lineTo(cx - s * 0.8f, cy - s); p.lineTo(cx - s * 0.8f, cy + s); p.close()
-                drawPath(p, white)
-            }
-            Kind.DOWN -> {
-                val cx = w / 2; val cy = h * 0.64f; val s = w * 0.26f
-                val p = Path()
-                p.moveTo(cx - s, cy - s * 0.7f); p.lineTo(cx + s, cy - s * 0.7f); p.lineTo(cx, cy + s * 0.9f); p.close()
-                drawPath(p, white)
-                drawLine(white.copy(alpha = 0.85f), Offset(w * 0.3f, h * 0.38f), Offset(w * 0.7f, h * 0.38f), h * 0.035f)
-                drawLine(white.copy(alpha = 0.85f), Offset(w * 0.3f, h * 0.47f), Offset(w * 0.7f, h * 0.47f), h * 0.035f)
-            }
-            Kind.ROTATE -> {
-                val cx = w / 2; val cy = h / 2; val r = w * 0.24f
-                drawArc(white, -60f, 290f, false, Offset(cx - r, cy - r), Size(2 * r, 2 * r), style = Stroke(w * 0.075f, cap = StrokeCap.Round))
+        val m = minOf(w, h)
+        val bodyH = h - m * 0.07f
+        val bw = if (kind == Kind.ROTATE) bodyH else w
+        val bx = (w - bw) / 2
+        val r = if (kind == Kind.ROTATE) bodyH / 2 else m * 0.3f
+        val corner = CornerRadius(r)
+        drawRoundRect(Color.Black.copy(alpha = 0.3f), Offset(bx, m * 0.07f), Size(bw, bodyH), corner)
+        translate(0f, if (pressed) m * 0.05f else 0f) {
+            drawRoundRect(btnBrush(t.btn, pressed), Offset(bx, 0f), Size(bw, bodyH), corner)
+            drawRoundRect(Color.White.copy(alpha = 0.22f), Offset(bx + bw * 0.08f, bodyH * 0.06f), Size(bw * 0.84f, bodyH * 0.38f), CornerRadius(r * 0.8f))
+            drawRoundRect(Color.White.copy(alpha = 0.4f), Offset(bx, 0f), Size(bw, bodyH), corner, style = Stroke(m * 0.03f))
+            val cx = bx + bw / 2
+            val cy = bodyH / 2
+            val white = Color.White
+            if (kind == Kind.ROTATE) {
+                val ar = bw * 0.26f
+                drawArc(white, -60f, 290f, false, Offset(cx - ar, cy - ar), Size(2 * ar, 2 * ar), style = Stroke(bw * 0.085f, cap = StrokeCap.Round))
                 val a = Math.toRadians(230.0).toFloat()
-                val px = cx + r * cos(a); val py = cy + r * sin(a)
-                val k = w * 0.1f
+                val px = cx + ar * cos(a); val py = cy + ar * sin(a)
+                val k = bw * 0.1f
                 val p = Path()
                 p.moveTo(px - sin(a) * k * 1.4f, py + cos(a) * k * 1.4f)
                 p.lineTo(px + cos(a) * k, py + sin(a) * k)
                 p.lineTo(px - cos(a) * k, py - sin(a) * k)
                 p.close()
                 drawPath(p, white)
+            } else {
+                val s = m * 0.24f
+                val p = Path()
+                when (kind) {
+                    Kind.LEFT -> { p.moveTo(cx + s * 0.5f, cy - s); p.lineTo(cx - s * 0.5f, cy); p.lineTo(cx + s * 0.5f, cy + s) }
+                    Kind.RIGHT -> { p.moveTo(cx - s * 0.5f, cy - s); p.lineTo(cx + s * 0.5f, cy); p.lineTo(cx - s * 0.5f, cy + s) }
+                    else -> { p.moveTo(cx - s, cy - s * 0.5f); p.lineTo(cx, cy + s * 0.5f); p.lineTo(cx + s, cy - s * 0.5f) }
+                }
+                drawPath(p, white, style = Stroke(m * 0.12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
         }
     }
 }
 
 @Composable
-fun MoveCluster(game: Game, t: Theme) {
-    Box(Modifier.width(188.dp).fillMaxHeight()) {
-        WoodButton(Kind.LEFT, t, Modifier.align(Alignment.TopStart).size(84.dp, 62.dp), repeat = true) { game.move(-1) }
-        WoodButton(Kind.RIGHT, t, Modifier.align(Alignment.TopEnd).size(84.dp, 62.dp), repeat = true) { game.move(1) }
-        WoodButton(Kind.DOWN, t, Modifier.align(Alignment.BottomCenter).size(56.dp, 78.dp), repeat = true) { game.softDrop() }
+fun MoveCluster(game: Game, t: Theme, scale: Float, shift: Float) {
+    val aw = 76f * scale; val ah = 66f * scale; val gap = 20f * scale; val vgap = 8f * scale
+    Box(Modifier.width((2 * aw + gap + shift).dp).height((2 * ah + vgap).dp)) {
+        WoodButton(Kind.LEFT, t, Modifier.size(aw.dp, ah.dp), repeat = true) { game.move(-1) }
+        WoodButton(Kind.RIGHT, t, Modifier.offset((aw + gap + shift).dp, 0.dp).size(aw.dp, ah.dp), repeat = true) { game.move(1) }
+        WoodButton(Kind.DOWN, t, Modifier.offset((aw / 2 + gap / 2).dp, (ah + vgap).dp).size(aw.dp, ah.dp), repeat = true) { game.softDrop() }
     }
 }
 
@@ -405,6 +402,8 @@ fun SettingsPanel(
     mirror: Boolean, onMirror: (Boolean) -> Unit,
     themeIdx: Int, onTheme: (Int) -> Unit,
     style: Int, onStyle: (Int) -> Unit,
+    arrow: Float, onArrow: (Float) -> Unit, onArrowDone: () -> Unit,
+    rshift: Float, onRshift: (Float) -> Unit, onRshiftDone: () -> Unit,
     onClose: () -> Unit,
 ) {
     // Le panneau reste en haut : on voit les boutons bouger en bas pendant le réglage.
@@ -416,11 +415,9 @@ fun SettingsPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("RÉGLAGES", color = t.accent, fontSize = 24.sp, fontWeight = FontWeight.Black)
-            Label("Hauteur des boutons : " + lift.toInt() + " dp depuis le bas", t)
-            Slider(
-                value = lift, onValueChange = onLift, onValueChangeFinished = onLiftDone, valueRange = 0f..140f,
-                colors = SliderDefaults.colors(thumbColor = t.accent, activeTrackColor = t.accent, inactiveTrackColor = t.plaque),
-            )
+            SettingSlider("Hauteur des boutons : " + lift.toInt() + " dp depuis le bas", lift, 0f..140f, t, onLift, onLiftDone)
+            SettingSlider("Taille des flèches : " + (arrow * 100).toInt() + " %", arrow, 0.7f..1.5f, t, onArrow, onArrowDone)
+            SettingSlider("Décalage de la flèche droite : " + rshift.toInt() + " dp", rshift, 0f..60f, t, onRshift, onRshiftDone)
             Label("Disposition", t)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("Rotation à droite", !mirror, t) { onMirror(false) }
@@ -464,4 +461,13 @@ fun StyleTile(name: String, idx: Int, selected: Boolean, t: Theme, onClick: () -
         }
         Text(name, color = t.text, fontSize = 10.sp)
     }
+}
+
+@Composable
+fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, t: Theme, onChange: (Float) -> Unit, onDone: () -> Unit) {
+    Label(label, t)
+    Slider(
+        value = value, onValueChange = onChange, onValueChangeFinished = onDone, valueRange = range,
+        colors = SliderDefaults.colors(thumbColor = t.accent, activeTrackColor = t.accent, inactiveTrackColor = t.plaque),
+    )
 }
