@@ -19,10 +19,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -33,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -50,7 +59,7 @@ fun TetrisApp() {
     val prefs = remember { ctx.getSharedPreferences("tetris", Context.MODE_PRIVATE) }
     val game = remember { Game(prefs) }
     var themeIdx by remember { mutableIntStateOf(prefs.getInt("theme", 0).coerceIn(0, THEMES.lastIndex)) }
-    var mirror by remember { mutableStateOf(prefs.getBoolean("mirror", false)) } // true = actions à gauche, déplacement à droite
+    var mirror by remember { mutableStateOf(prefs.getBoolean("mirror", false)) } // true = rotation à gauche, flèches à droite
     val t = THEMES[themeIdx]
     val haptic = LocalHapticFeedback.current
 
@@ -66,38 +75,44 @@ fun TetrisApp() {
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { game.pause() }
     BackHandler(enabled = game.state == GState.PLAYING) { game.pause() }
 
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(t.bg))) {
-        Column(
-            Modifier.fillMaxSize().systemBarsPadding().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Stat("SCORE", game.score.toString(), t, Modifier.weight(1.5f))
-                Stat("NIVEAU", game.level.toString(), t, Modifier.weight(1f))
-                Stat("LIGNES", game.lines.toString(), t, Modifier.weight(1f))
-            }
-            Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                    BoardView(game, t)
-                }
-                Column(Modifier.width(92.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Preview("RÉSERVE", game.hold, t) { game.holdPiece() }
-                    Preview("SUIVANT", game.next, t)
-                    Stat("RECORD", game.best.toString(), t, Modifier.fillMaxWidth())
-                    Spacer(Modifier.weight(1f))
-                    CtrlButton("II", t, Modifier.fillMaxWidth()) { game.pause() }
-                }
-            }
+    Box(Modifier.fillMaxSize()) {
+        Backdrop(t)
+        Column(Modifier.fillMaxSize()) {
+            // ---- zone de jeu : plateau à gauche, cadres à droite ----
             Row(
-                Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                Modifier.weight(1f).fillMaxWidth().statusBarsPadding().padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (!mirror) {
-                    MoveCluster(game, t, Modifier.weight(1f))
-                    ActionCluster(game, t, Modifier.weight(1f))
-                } else {
-                    ActionCluster(game, t, Modifier.weight(1f))
-                    MoveCluster(game, t, Modifier.weight(1f))
+                Column(Modifier.weight(2.3f).fillMaxHeight()) {
+                    ScoreBar(game.score, t)
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopStart) { BoardView(game, t) }
+                }
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        InfoPanel("RÉSERVE", t, Modifier.weight(1f)) { PieceCanvas(game.hold, t) }
+                        WoodPill("II", t, Modifier.size(38.dp)) { game.pause() }
+                    }
+                    InfoPanel("SUIVANT", t, Modifier.fillMaxWidth()) { PieceCanvas(game.next, t) }
+                    InfoPanel("NIVEAU", t, Modifier.fillMaxWidth(), t.accent) { Value(game.level.toString(), t) }
+                    InfoPanel("LIGNES", t, Modifier.fillMaxWidth()) { Value(game.lines.toString(), t) }
+                    InfoPanel("RECORD", t, Modifier.fillMaxWidth()) { Value(game.best.toString(), t) }
+                    Spacer(Modifier.weight(1f))
+                    WoodPill("RÉSERVE", t, Modifier.fillMaxWidth().height(44.dp)) { game.holdPiece() }
+                }
+            }
+            // ---- zone des pouces ----
+            Box(
+                Modifier.fillMaxWidth()
+                    .background(if (t.wood) Color(0xFFDDBB8E) else Color.Black.copy(alpha = 0.22f))
+                    .navigationBarsPadding().height(150.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (!mirror) { MoveCluster(game, t); RotateButton(game, t) }
+                    else { RotateButton(game, t); MoveCluster(game, t) }
                 }
             }
         }
@@ -131,18 +146,13 @@ fun TetrisApp() {
                     }
                     Text("BOUTONS", color = t.text.copy(alpha = 0.7f), fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("Déplacement à gauche", !mirror, t) { mirror = false; prefs.edit().putBoolean("mirror", false).apply() }
+                        Chip("Rotation à droite", !mirror, t) { mirror = false; prefs.edit().putBoolean("mirror", false).apply() }
                         Chip("Inversé", mirror, t) { mirror = true; prefs.edit().putBoolean("mirror", true).apply() }
                     }
                     Text("THÈME", color = t.text.copy(alpha = 0.7f), fontSize = 12.sp)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         THEMES.forEachIndexed { i, th ->
-                            val sel = i == themeIdx
-                            Box(
-                                Modifier.clip(RoundedCornerShape(50)).background(if (sel) t.accent else t.panel)
-                                    .clickable { themeIdx = i; prefs.edit().putInt("theme", i).apply() }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                            ) { Text(th.name, color = if (sel) t.board else t.text, fontWeight = FontWeight.SemiBold) }
+                            Chip(th.name, i == themeIdx, t) { themeIdx = i; prefs.edit().putInt("theme", i).apply() }
                         }
                     }
                 }
@@ -151,21 +161,71 @@ fun TetrisApp() {
     }
 }
 
+// ---------- décor ----------
+
+@Composable
+fun Backdrop(t: Theme) {
+    Canvas(Modifier.fillMaxSize()) {
+        if (t.wood) {
+            val n = 7
+            val w = size.width / n
+            for (i in 0 until n) {
+                drawRect(t.bg[i % t.bg.size], Offset(i * w, 0f), Size(w, size.height))
+                drawLine(Color(0x55000000), Offset(i * w, 0f), Offset(i * w, size.height), 2f)
+            }
+        } else drawRect(Brush.verticalGradient(t.bg))
+    }
+}
+
+@Composable
+fun ScoreBar(score: Int, t: Theme) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp)).background(t.plaque)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("SCORE", color = t.onPlaque, fontWeight = FontWeight.Black, fontSize = 16.sp)
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(t.well).padding(vertical = 3.dp), contentAlignment = Alignment.Center) {
+            Text(score.toString(), color = t.text, fontWeight = FontWeight.Black, fontSize = 20.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+fun InfoPanel(title: String, t: Theme, modifier: Modifier = Modifier, titleColor: Color = t.onPlaque, content: @Composable BoxScope.() -> Unit) {
+    Column(
+        modifier.clip(RoundedCornerShape(10.dp)).background(t.plaque).padding(3.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(title, color = titleColor, fontSize = 10.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        Box(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(t.well).padding(4.dp),
+            contentAlignment = Alignment.Center, content = content,
+        )
+    }
+}
+
+@Composable
+fun Value(v: String, t: Theme) {
+    Text(v, color = t.text, fontSize = 20.sp, fontWeight = FontWeight.Black, maxLines = 1)
+}
+
 private fun DrawScope.cellAt(px: Float, py: Float, s: Float, c: Color, a: Float = 1f) {
-    val pad = s * 0.06f
-    drawRoundRect(c.copy(alpha = a), Offset(px + pad, py + pad), Size(s - 2 * pad, s - 2 * pad), CornerRadius(s * 0.22f))
-    if (a == 1f) drawRoundRect(
-        Color.White.copy(alpha = 0.25f), Offset(px + pad * 2, py + pad * 2),
-        Size(s - 4 * pad, (s - 4 * pad) * 0.35f), CornerRadius(s * 0.15f),
-    )
+    val pad = s * 0.03f
+    drawRoundRect(c.copy(alpha = a), Offset(px + pad, py + pad), Size(s - 2 * pad, s - 2 * pad), CornerRadius(s * 0.1f))
+    if (a == 1f) {
+        drawRoundRect(Color.White.copy(alpha = 0.28f), Offset(px + pad * 3, py + pad * 3), Size(s - 6 * pad, (s - 6 * pad) * 0.3f), CornerRadius(s * 0.08f))
+        drawRoundRect(Color.Black.copy(alpha = 0.18f), Offset(px + pad * 3, py + s * 0.7f), Size(s - 6 * pad, s * 0.22f), CornerRadius(s * 0.08f))
+    }
 }
 
 @Composable
 fun BoardView(game: Game, t: Theme) {
     Canvas(
         Modifier.aspectRatio(COLS / ROWS.toFloat(), matchHeightConstraintsFirst = true)
-            .clip(RoundedCornerShape(12.dp)).background(t.board)
-            .border(2.dp, t.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(6.dp)).background(t.board)
+            .border(3.dp, t.plaque, RoundedCornerShape(6.dp)),
     ) {
         val s = size.width / COLS
         for (i in 1 until COLS) drawLine(t.grid, Offset(i * s, 0f), Offset(i * s, size.height))
@@ -178,84 +238,126 @@ fun BoardView(game: Game, t: Theme) {
 }
 
 @Composable
-fun Panel(t: Theme, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier.clip(RoundedCornerShape(14.dp)).background(t.panel).padding(8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, content = content,
-    )
-}
-
-@Composable
-fun Stat(label: String, value: String, t: Theme, modifier: Modifier) {
-    Panel(t, modifier) {
-        Text(label, color = t.text.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        Text(value, color = t.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-    }
-}
-
-@Composable
-fun Preview(title: String, type: Int, t: Theme, onClick: (() -> Unit)? = null) {
-    Panel(t, Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
-        Text(title, color = t.text.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        Canvas(Modifier.fillMaxWidth().aspectRatio(1f)) {
-            if (type < 0) return@Canvas
-            val cells = SHAPES[type][0]
-            val s = size.width / 4.5f
-            val w = cells.maxOf { it.first } - cells.minOf { it.first } + 1
-            val h = cells.maxOf { it.second } - cells.minOf { it.second } + 1
-            val ox = (size.width - w * s) / 2 - cells.minOf { it.first } * s
-            val oy = (size.height - h * s) / 2 - cells.minOf { it.second } * s
-            cells.forEach { (x, y) -> cellAt(ox + x * s, oy + y * s, s, t.pieces[type]) }
-        }
-    }
-}
-
-@Composable
-fun CtrlButton(label: String, t: Theme, modifier: Modifier, repeat: Boolean = false, fs: Int = 22, h: Int = 58, action: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val act by rememberUpdatedState(action)
-    Box(
-        modifier.height(h.dp).clip(RoundedCornerShape(16.dp)).background(t.panel).pointerInput(repeat) {
-            detectTapGestures(onPress = {
-                act()
-                val job = if (repeat) scope.launch { delay(150); while (true) { act(); delay(45) } } else null
-                tryAwaitRelease()
-                job?.cancel()
-            })
-        },
-        contentAlignment = Alignment.Center,
-    ) { Text(label, color = t.text, fontSize = fs.sp, fontWeight = FontWeight.Bold) }
-}
-
-
-/** Pouce gauche (ou droit si inversé) : déplacer. Gros boutons dans le coin bas, ▼ juste au-dessus. */
-@Composable
-fun MoveCluster(game: Game, t: Theme, modifier: Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        CtrlButton("▼", t, Modifier.fillMaxWidth(), repeat = true, h = 54) { game.softDrop() }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CtrlButton("◀", t, Modifier.weight(1f), repeat = true, h = 92) { game.move(-1) }
-            CtrlButton("▶", t, Modifier.weight(1f), repeat = true, h = 92) { game.move(1) }
-        }
-    }
-}
-
-/** Autre pouce : rotation au bord de l'écran (là où le pouce repose), chute directe à côté, réserve au-dessus. */
-@Composable
-fun ActionCluster(game: Game, t: Theme, modifier: Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        CtrlButton("RÉSERVE", t, Modifier.fillMaxWidth(), fs = 13, h = 54) { game.holdPiece() }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CtrlButton("⇩", t, Modifier.weight(1f), h = 92) { game.hardDrop() }
-            CtrlButton("↻", t, Modifier.weight(1f), h = 92) { game.rotate() }
-        }
+fun PieceCanvas(type: Int, t: Theme) {
+    Canvas(Modifier.fillMaxWidth().aspectRatio(1f)) {
+        if (type < 0) return@Canvas
+        val cells = SHAPES[type][0]
+        val s = size.width / 4.5f
+        val w = cells.maxOf { it.first } - cells.minOf { it.first } + 1
+        val h = cells.maxOf { it.second } - cells.minOf { it.second } + 1
+        val ox = (size.width - w * s) / 2 - cells.minOf { it.first } * s
+        val oy = (size.height - h * s) / 2 - cells.minOf { it.second } * s
+        cells.forEach { (x, y) -> cellAt(ox + x * s, oy + y * s, s, t.pieces[type]) }
     }
 }
 
 @Composable
 fun Chip(label: String, selected: Boolean, t: Theme, onClick: () -> Unit) {
     Box(
-        Modifier.clip(RoundedCornerShape(50)).background(if (selected) t.accent else t.panel)
+        Modifier.clip(RoundedCornerShape(50)).background(if (selected) t.accent else t.plaque)
             .clickable { onClick() }.padding(horizontal = 14.dp, vertical = 8.dp),
-    ) { Text(label, color = if (selected) t.board else t.text, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+    ) { Text(label, color = if (selected) t.board else t.onPlaque, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+}
+
+// ---------- boutons style « bois » ----------
+
+private val RIM = Brush.verticalGradient(listOf(Color(0xFFF2F2F2), Color(0xFF858585)))
+
+private fun btnBrush(c: Color, pressed: Boolean): Brush = Brush.verticalGradient(
+    listOf(lerp(c, Color.White, 0.25f), lerp(c, Color.Black, 0.3f)).map { if (pressed) lerp(it, Color.Black, 0.25f) else it },
+)
+
+@Composable
+fun WoodPill(label: String, t: Theme, modifier: Modifier, shape: Shape = RoundedCornerShape(50), action: () -> Unit) {
+    val act by rememberUpdatedState(action)
+    var pressed by remember { mutableStateOf(false) }
+    Box(
+        modifier.clip(shape).background(RIM).padding(3.dp).clip(shape).background(btnBrush(t.btn, pressed))
+            .pointerInput(Unit) { detectTapGestures(onPress = { pressed = true; act(); tryAwaitRelease(); pressed = false }) },
+        contentAlignment = Alignment.Center,
+    ) { Text(label, color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp) }
+}
+
+enum class Kind { LEFT, RIGHT, DOWN, ROTATE }
+
+/** Bouton dessiné au Canvas : flèches hexagonales, flèche du bas en « maison », gros bouton rond de rotation. */
+@Composable
+fun WoodButton(kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false, action: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val act by rememberUpdatedState(action)
+    var pressed by remember { mutableStateOf(false) }
+    Canvas(
+        modifier.pointerInput(repeat) {
+            detectTapGestures(onPress = {
+                pressed = true
+                act()
+                val job = if (repeat) scope.launch { delay(150); while (true) { act(); delay(45) } } else null
+                tryAwaitRelease()
+                job?.cancel()
+                pressed = false
+            })
+        },
+    ) {
+        val w = size.width
+        val h = size.height
+        val shape = Path()
+        when (kind) {
+            Kind.LEFT -> { shape.moveTo(0f, h / 2); shape.lineTo(w * 0.28f, 0f); shape.lineTo(w, 0f); shape.lineTo(w, h); shape.lineTo(w * 0.28f, h); shape.close() }
+            Kind.RIGHT -> { shape.moveTo(w, h / 2); shape.lineTo(w * 0.72f, 0f); shape.lineTo(0f, 0f); shape.lineTo(0f, h); shape.lineTo(w * 0.72f, h); shape.close() }
+            Kind.DOWN -> { shape.moveTo(w / 2, 0f); shape.lineTo(w, h * 0.28f); shape.lineTo(w, h); shape.lineTo(0f, h); shape.lineTo(0f, h * 0.28f); shape.close() }
+            Kind.ROTATE -> shape.addOval(Rect(0f, 0f, w, h))
+        }
+        drawPath(shape, RIM)
+        scale(0.88f) { drawPath(shape, btnBrush(t.btn, pressed)) }
+        val white = Color.White
+        when (kind) {
+            Kind.LEFT -> {
+                val cx = w * 0.55f; val cy = h / 2; val s = h * 0.26f
+                val p = Path()
+                p.moveTo(cx - s, cy); p.lineTo(cx + s * 0.8f, cy - s); p.lineTo(cx + s * 0.8f, cy + s); p.close()
+                drawPath(p, white)
+            }
+            Kind.RIGHT -> {
+                val cx = w * 0.45f; val cy = h / 2; val s = h * 0.26f
+                val p = Path()
+                p.moveTo(cx + s, cy); p.lineTo(cx - s * 0.8f, cy - s); p.lineTo(cx - s * 0.8f, cy + s); p.close()
+                drawPath(p, white)
+            }
+            Kind.DOWN -> {
+                val cx = w / 2; val cy = h * 0.64f; val s = w * 0.26f
+                val p = Path()
+                p.moveTo(cx - s, cy - s * 0.7f); p.lineTo(cx + s, cy - s * 0.7f); p.lineTo(cx, cy + s * 0.9f); p.close()
+                drawPath(p, white)
+                drawLine(white.copy(alpha = 0.85f), Offset(w * 0.3f, h * 0.38f), Offset(w * 0.7f, h * 0.38f), h * 0.035f)
+                drawLine(white.copy(alpha = 0.85f), Offset(w * 0.3f, h * 0.47f), Offset(w * 0.7f, h * 0.47f), h * 0.035f)
+            }
+            Kind.ROTATE -> {
+                val cx = w / 2; val cy = h / 2; val r = w * 0.24f
+                drawArc(white, -60f, 290f, false, Offset(cx - r, cy - r), Size(2 * r, 2 * r), style = Stroke(w * 0.075f, cap = StrokeCap.Round))
+                val a = Math.toRadians(230.0).toFloat()
+                val px = cx + r * cos(a); val py = cy + r * sin(a)
+                val k = w * 0.1f
+                val p = Path()
+                p.moveTo(px - sin(a) * k * 1.4f, py + cos(a) * k * 1.4f)
+                p.lineTo(px + cos(a) * k, py + sin(a) * k)
+                p.lineTo(px - cos(a) * k, py - sin(a) * k)
+                p.close()
+                drawPath(p, white)
+            }
+        }
+    }
+}
+
+@Composable
+fun MoveCluster(game: Game, t: Theme) {
+    Box(Modifier.width(188.dp).fillMaxHeight()) {
+        WoodButton(Kind.LEFT, t, Modifier.align(Alignment.TopStart).size(84.dp, 62.dp), repeat = true) { game.move(-1) }
+        WoodButton(Kind.RIGHT, t, Modifier.align(Alignment.TopEnd).size(84.dp, 62.dp), repeat = true) { game.move(1) }
+        WoodButton(Kind.DOWN, t, Modifier.align(Alignment.BottomCenter).size(56.dp, 78.dp), repeat = true) { game.softDrop() }
+    }
+}
+
+@Composable
+fun RotateButton(game: Game, t: Theme) {
+    WoodButton(Kind.ROTATE, t, Modifier.size(116.dp)) { game.rotate() }
 }
