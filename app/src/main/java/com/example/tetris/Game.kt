@@ -1,0 +1,141 @@
+package com.example.tetris
+
+import android.content.SharedPreferences
+import androidx.compose.runtime.*
+
+const val COLS = 10
+const val ROWS = 20
+
+enum class GState { READY, PLAYING, PAUSED, OVER }
+
+/** Ordre des pièces : I, O, T, S, Z, J, L — 4 rotations pré-calculées. */
+val SHAPES: List<List<List<Pair<Int, Int>>>> = listOf(
+    4 to listOf(0 to 1, 1 to 1, 2 to 1, 3 to 1),
+    2 to listOf(0 to 0, 1 to 0, 0 to 1, 1 to 1),
+    3 to listOf(1 to 0, 0 to 1, 1 to 1, 2 to 1),
+    3 to listOf(1 to 0, 2 to 0, 0 to 1, 1 to 1),
+    3 to listOf(0 to 0, 1 to 0, 1 to 1, 2 to 1),
+    3 to listOf(0 to 0, 0 to 1, 1 to 1, 2 to 1),
+    3 to listOf(2 to 0, 0 to 1, 1 to 1, 2 to 1),
+).map { (n, base) ->
+    val r = mutableListOf(base)
+    repeat(3) { r.add(r.last().map { (x, y) -> (n - 1 - y) to x }) }
+    r
+}
+
+data class Piece(val type: Int, val rot: Int = 0, val x: Int = 3, val y: Int = 0) {
+    val cells get() = SHAPES[type][rot].map { (dx, dy) -> (x + dx) to (y + dy) }
+}
+
+class Game(private val prefs: SharedPreferences) {
+    var board by mutableStateOf(IntArray(COLS * ROWS))
+    var piece by mutableStateOf<Piece?>(null)
+    var next by mutableIntStateOf(0)
+    var hold by mutableIntStateOf(-1)
+    var score by mutableIntStateOf(0)
+    var lines by mutableIntStateOf(0)
+    var best by mutableIntStateOf(prefs.getInt("best", 0))
+    var state by mutableStateOf(GState.READY)
+    var onEvent: (Int) -> Unit = {}   // 0 = pose, n>0 = n lignes
+
+    val level get() = lines / 10 + 1
+    val delayMs get() = maxOf(80L, 800L - (level - 1) * 70L)
+
+    private var bag = mutableListOf<Int>()
+    private var canHold = true
+
+    private fun draw(): Int {
+        if (bag.isEmpty()) bag = (0..6).shuffled().toMutableList()
+        return bag.removeAt(bag.lastIndex)
+    }
+
+    fun start() {
+        board = IntArray(COLS * ROWS); score = 0; lines = 0; hold = -1
+        bag.clear(); next = draw(); state = GState.PLAYING; spawnNext()
+    }
+
+    fun pause() { if (state == GState.PLAYING) state = GState.PAUSED }
+    fun resume() { if (state == GState.PAUSED) state = GState.PLAYING }
+
+    private fun fits(p: Piece) = p.cells.all { (x, y) ->
+        x in 0 until COLS && y < ROWS && (y < 0 || board[y * COLS + x] == 0)
+    }
+
+    private fun spawn(t: Int) {
+        val p = Piece(t); piece = p; canHold = true
+        if (!fits(p)) gameOver()
+    }
+
+    private fun spawnNext() { val t = next; next = draw(); spawn(t) }
+
+    private fun gameOver() {
+        state = GState.OVER
+        if (score > best) { best = score; prefs.edit().putInt("best", best).apply() }
+    }
+
+    fun move(dx: Int) {
+        val p = piece ?: return
+        if (state != GState.PLAYING) return
+        p.copy(x = p.x + dx).let { if (fits(it)) piece = it }
+    }
+
+    fun rotate() {
+        val p = piece ?: return
+        if (state != GState.PLAYING) return
+        val r = (p.rot + 1) % 4
+        for (k in intArrayOf(0, -1, 1, -2, 2)) {          // « wall kicks » simplifiés
+            val q = p.copy(rot = r, x = p.x + k)
+            if (fits(q)) { piece = q; return }
+            val up = q.copy(y = q.y - 1)
+            if (fits(up)) { piece = up; return }
+        }
+    }
+
+    /** Gravité : renvoie true si la pièce a été posée. */
+    fun step(): Boolean {
+        val p = piece ?: return false
+        if (state != GState.PLAYING) return false
+        val q = p.copy(y = p.y + 1)
+        if (fits(q)) { piece = q; return false }
+        lock(); return true
+    }
+
+    fun softDrop() { if (state == GState.PLAYING && !step()) score += 1 }
+
+    fun ghost(): Piece? {
+        var p = piece ?: return null
+        while (fits(p.copy(y = p.y + 1))) p = p.copy(y = p.y + 1)
+        return p
+    }
+
+    fun hardDrop() {
+        val p = piece ?: return
+        if (state != GState.PLAYING) return
+        val g = ghost() ?: return
+        score += 2 * (g.y - p.y); piece = g; lock()
+    }
+
+    fun holdPiece() {
+        val p = piece ?: return
+        if (state != GState.PLAYING || !canHold) return
+        val h = hold; hold = p.type
+        if (h < 0) spawnNext() else spawn(h)
+        canHold = false
+    }
+
+    private fun lock() {
+        val p = piece ?: return
+        val b = board.copyOf()
+        p.cells.forEach { (x, y) -> if (y >= 0) b[y * COLS + x] = p.type + 1 }
+        val kept = (0 until ROWS).filter { r -> (0 until COLS).any { b[r * COLS + it] == 0 } }
+        val cleared = ROWS - kept.size
+        val nb = IntArray(COLS * ROWS)
+        kept.forEachIndexed { i, r -> System.arraycopy(b, r * COLS, nb, (ROWS - kept.size + i) * COLS, COLS) }
+        val lv = level
+        board = nb
+        if (cleared > 0) { score += intArrayOf(0, 100, 300, 500, 800)[cleared] * lv; lines += cleared }
+        if (score > best) { best = score; prefs.edit().putInt("best", best).apply() }
+        onEvent(cleared)
+        spawnNext()
+    }
+}
