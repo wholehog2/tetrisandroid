@@ -50,6 +50,7 @@ fun TetrisApp() {
     val prefs = remember { ctx.getSharedPreferences("tetris", Context.MODE_PRIVATE) }
     val game = remember { Game(prefs) }
     var themeIdx by remember { mutableIntStateOf(prefs.getInt("theme", 0).coerceIn(0, THEMES.lastIndex)) }
+    var mirror by remember { mutableStateOf(prefs.getBoolean("mirror", false)) } // true = actions à gauche, déplacement à droite
     val t = THEMES[themeIdx]
     val haptic = LocalHapticFeedback.current
 
@@ -88,22 +89,15 @@ fun TetrisApp() {
                 }
             }
             Row(
-                Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CtrlButton("◀", t, Modifier.weight(1f), repeat = true, h = 76) { game.move(-1) }
-                        CtrlButton("▶", t, Modifier.weight(1f), repeat = true, h = 76) { game.move(1) }
-                    }
-                    CtrlButton("▼", t, Modifier.fillMaxWidth(), repeat = true) { game.softDrop() }
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CtrlButton("↻", t, Modifier.weight(1f), h = 76) { game.rotate() }
-                        CtrlButton("⇩", t, Modifier.weight(1f), h = 76) { game.hardDrop() }
-                    }
-                    CtrlButton("RÉSERVE", t, Modifier.fillMaxWidth(), fs = 13) { game.holdPiece() }
+                if (!mirror) {
+                    MoveCluster(game, t, Modifier.weight(1f))
+                    ActionCluster(game, t, Modifier.weight(1f))
+                } else {
+                    ActionCluster(game, t, Modifier.weight(1f))
+                    MoveCluster(game, t, Modifier.weight(1f))
                 }
             }
         }
@@ -134,6 +128,11 @@ fun TetrisApp() {
                     }
                     if (game.state == GState.PAUSED) {
                         Button(onClick = { game.start() }, colors = btn, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("RECOMMENCER") }
+                    }
+                    Text("BOUTONS", color = t.text.copy(alpha = 0.7f), fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Chip("Déplacement à gauche", !mirror, t) { mirror = false; prefs.edit().putBoolean("mirror", false).apply() }
+                        Chip("Inversé", mirror, t) { mirror = true; prefs.edit().putBoolean("mirror", true).apply() }
                     }
                     Text("THÈME", color = t.text.copy(alpha = 0.7f), fontSize = 12.sp)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -228,3 +227,35 @@ fun CtrlButton(label: String, t: Theme, modifier: Modifier, repeat: Boolean = fa
     ) { Text(label, color = t.text, fontSize = fs.sp, fontWeight = FontWeight.Bold) }
 }
 
+
+/** Pouce gauche (ou droit si inversé) : déplacer. Gros boutons dans le coin bas, ▼ juste au-dessus. */
+@Composable
+fun MoveCluster(game: Game, t: Theme, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        CtrlButton("▼", t, Modifier.fillMaxWidth(), repeat = true, h = 54) { game.softDrop() }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CtrlButton("◀", t, Modifier.weight(1f), repeat = true, h = 92) { game.move(-1) }
+            CtrlButton("▶", t, Modifier.weight(1f), repeat = true, h = 92) { game.move(1) }
+        }
+    }
+}
+
+/** Autre pouce : rotation au bord de l'écran (là où le pouce repose), chute directe à côté, réserve au-dessus. */
+@Composable
+fun ActionCluster(game: Game, t: Theme, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        CtrlButton("RÉSERVE", t, Modifier.fillMaxWidth(), fs = 13, h = 54) { game.holdPiece() }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CtrlButton("⇩", t, Modifier.weight(1f), h = 92) { game.hardDrop() }
+            CtrlButton("↻", t, Modifier.weight(1f), h = 92) { game.rotate() }
+        }
+    }
+}
+
+@Composable
+fun Chip(label: String, selected: Boolean, t: Theme, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(50)).background(if (selected) t.accent else t.panel)
+            .clickable { onClick() }.padding(horizontal = 14.dp, vertical = 8.dp),
+    ) { Text(label, color = if (selected) t.board else t.text, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+}
