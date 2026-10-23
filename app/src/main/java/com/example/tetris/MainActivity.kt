@@ -449,7 +449,7 @@ fun SettingsPanel(
             SettingSlider("Hauteur des boutons : " + lift.toInt() + " dp depuis le bas", lift, 0f..140f, t, onLift, onLiftDone)
             SettingSlider("Taille des flèches : " + (arrow * 100).toInt() + " %", arrow, 0.7f..1.5f, t, onArrow, onArrowDone)
             SettingSlider("Flèche gauche, vers le bouton de rotation : " + lshift.toInt() + " dp", lshift.coerceIn(0f, maxL), 0f..maxL, t, onLshift, onLshiftDone)
-            SettingSlider("Décalage de la flèche droite : " + rshift.toInt() + " dp", rshift, 0f..60f, t, onRshift, onRshiftDone)
+            SettingSlider("Décalage de la flèche droite : " + rshift.toInt() + " dp", rshift, 0f..160f, t, onRshift, onRshiftDone)
             Label("Disposition", t)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("Rotation à droite", !mirror, t) { onMirror(false) }
