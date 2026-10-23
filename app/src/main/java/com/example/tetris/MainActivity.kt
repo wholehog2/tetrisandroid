@@ -30,6 +30,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
@@ -45,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.delay
@@ -112,10 +116,25 @@ fun TetrisApp() {
                     }
                     InfoPanel("SUIVANT", t, Modifier.fillMaxWidth()) { PieceCanvas(game.next, t, style) }
                     InfoPanel("NIV " + game.level + " · LIGNES", t, Modifier.fillMaxWidth(), t.accent) { Value(game.lines.toString(), t) }
-                    InfoPanel(if (game.mode == Mode.PICTURE) "TABLEAU" else "TEMPS", t, Modifier.fillMaxWidth()) {
-                        Value(if (game.mode == Mode.PICTURE) game.picture.toString() else fmtTime(game.timeMs), t)
+                    when (game.mode) {
+                        Mode.PICTURE -> InfoPanel("TABLEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString(), t) }
+                        Mode.PUZZLE -> {
+                            InfoPanel("NIVEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PUZZLES.size, t) }
+                            InfoPanel("PIÈCES", t, Modifier.fillMaxWidth()) { Value(game.piecesLeft.toString(), t) }
+                        }
+                        Mode.MISSIONS -> InfoPanel("MISSIONS", t, Modifier.fillMaxWidth()) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                game.missions.forEach { (k, c) ->
+                                    Text("×" + k + " → " + c, color = t.text, fontSize = 15.sp, fontWeight = FontWeight.Black)
+                                }
+                            }
+                        }
+                        Mode.DUEL -> InfoPanel("ADVERSAIRE", t, Modifier.fillMaxWidth()) { OpponentBoard(game.oppBoard, t) }
+                        else -> InfoPanel("TEMPS", t, Modifier.fillMaxWidth()) { Value(fmtTime(game.timeMs), t) }
                     }
-                    InfoPanel("RECORD", t, Modifier.fillMaxWidth()) { Value(game.best.toString(), t) }
+                    if (game.mode != Mode.PUZZLE && game.mode != Mode.DUEL) {
+                        InfoPanel("RECORD", t, Modifier.fillMaxWidth()) { Value(game.best.toString(), t) }
+                    }
                     Spacer(Modifier.weight(1f))
                     WoodPill("RÉSERVE", t, Modifier.fillMaxWidth().height(44.dp)) { game.holdPiece() }
                 }
@@ -156,22 +175,22 @@ fun TetrisApp() {
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Text(
-                            if (game.state == GState.PAUSED) "PAUSE" else "GAME OVER",
+                            if (game.state == GState.PAUSED) "PAUSE" else game.result,
                             color = t.accent, fontSize = 34.sp, fontWeight = FontWeight.Black,
                         )
                         Text(game.mode.title, color = t.text.copy(alpha = 0.8f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         if (game.state == GState.OVER) {
                             Text(
-                                "Score : " + game.score + (if (game.mode == Mode.PICTURE) "\nTableau : " + game.picture else "") + "\n" + game.recordLabel(game.mode),
+                                "Score : " + game.score + (if (game.mode == Mode.PICTURE || game.mode == Mode.PUZZLE) "\nNiveau : " + game.picture else "") + "\n" + game.recordLabel(game.mode),
                                 color = t.text, textAlign = TextAlign.Center, fontSize = 18.sp,
                             )
                         }
                         val btn = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board)
                         Button(
-                            onClick = { if (game.state == GState.PAUSED) game.resume() else game.start() },
+                            onClick = { if (game.state == GState.PAUSED) game.resume() else game.start(retry = game.canRetry) },
                             colors = btn, modifier = Modifier.fillMaxWidth().height(52.dp),
                         ) {
-                            Text(when (game.state) { GState.READY -> "JOUER"; GState.PAUSED -> "REPRENDRE"; else -> "REJOUER" }, fontWeight = FontWeight.Bold)
+                            Text(when (game.state) { GState.READY -> "JOUER"; GState.PAUSED -> "REPRENDRE"; else -> if (game.canRetry) "RÉESSAYER" else "REJOUER" }, fontWeight = FontWeight.Bold)
                         }
                         if (game.state == GState.PAUSED) {
                             Button(onClick = { game.start() }, colors = btn, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("RECOMMENCER") }
@@ -277,20 +296,135 @@ private fun DrawScope.cellAt(px: Float, py: Float, s: Float, c: Color, a: Float 
     }
 }
 
+private val RAINBOW = listOf(
+    Color(0xFFFF3B30), Color(0xFFFFCC00), Color(0xFF34C759), Color(0xFF00C7FF), Color(0xFF5E5CE6), Color(0xFFFF2D92), Color(0xFFFF3B30),
+)
+
+/**
+ * Animations selon le nombre de lignes : 1 = balayage blanc ; 2 = onde depuis le centre ; 3 = clignotement + éclats + secousse ;
+ * 4 (Tétris) = flash plein plateau, arc-en-ciel, confettis et grosse secousse.
+ */
+private fun DrawScope.clearEffect(f: ClearFx, ph: Float, s: Float, t: Theme) {
+    val w = size.width
+    fun particles(count: Int, power: Float) {
+        for (i in 0 until count) {
+            val r = f.rows[i % f.rows.size]
+            val ang = i * 2.4f
+            val sp = (40 + (i * 53) % 140) * power
+            val px = ((i * 7) % COLS + 0.5f) * s + cos(ang) * sp * ph
+            val py = (r + 0.5f) * s + sin(ang) * sp * ph + 260f * ph * ph
+            val sz = s * 0.35f * (1f - ph)
+            drawRect(t.pieces[(i + f.id) % 7].copy(alpha = 1f - ph * 0.7f), Offset(px - sz / 2, py - sz / 2), Size(sz, sz))
+        }
+    }
+    when {
+        f.count >= 4 -> {
+            drawRect(Color.White.copy(alpha = 0.6f * (1f - ph) * (1f - ph)), Offset.Zero, size)
+            f.rows.forEach { r ->
+                val x0 = ph * 2f * w
+                drawRect(Brush.horizontalGradient(RAINBOW, x0, x0 + w, TileMode.Repeated), Offset(0f, r * s), Size(w, s), 0.95f * (1f - ph * ph))
+            }
+            particles(110, 2.2f)
+        }
+        f.count == 3 -> {
+            val a = abs(sin(ph * PI.toFloat() * 3f)) * 0.9f
+            f.rows.forEach { r -> drawRect(t.pieces[0].copy(alpha = a), Offset(0f, r * s), Size(w, s)) }
+            particles(40, 1.4f)
+        }
+        f.count == 2 -> {
+            val ww = w * minOf(1f, ph * 1.7f)
+            f.rows.forEach { r ->
+                drawRect(t.accent.copy(alpha = 0.85f * (1f - ph * ph)), Offset((w - ww) / 2, r * s), Size(ww, s))
+                drawRect(Color.White.copy(alpha = 0.5f * (1f - ph)), Offset(0f, r * s), Size(w, s))
+            }
+        }
+        else -> f.rows.forEach { r ->
+            drawRect(Color.White.copy(alpha = 0.5f * (1f - ph)), Offset(0f, r * s), Size(w, s))
+            drawRect(Color.White.copy(alpha = 0.85f * (1f - ph * ph)), Offset(0f, r * s), Size(w * ph, s))
+        }
+    }
+}
+
 @Composable
 fun BoardView(game: Game, t: Theme, style: Int) {
-    Canvas(
+    val fx = game.fx
+    var prog by remember { mutableFloatStateOf(1f) }
+    LaunchedEffect(fx?.id) {
+        val f = fx
+        if (f != null) {
+            prog = 0f
+            val start = withFrameNanos { it }
+            while (prog < 1f) {
+                val now = withFrameNanos { it }
+                prog = ((now - start) / 1_000_000f / f.duration).coerceAtMost(1f)
+            }
+        }
+    }
+    Box(
         Modifier.aspectRatio(COLS / ROWS.toFloat(), matchHeightConstraintsFirst = true)
-            .clip(RoundedCornerShape(6.dp)).background(t.board)
-            .border(3.dp, t.plaque, RoundedCornerShape(6.dp)),
+            .graphicsLayer {
+                val f = game.fx
+                if (f != null && prog < 1f && f.count >= 3) {
+                    val amp = if (f.count >= 4) 14f else 6f
+                    translationX = sin(prog * 50f) * amp * (1f - prog) * density
+                }
+            },
     ) {
+        Canvas(
+            Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).background(t.board)
+                .border(3.dp, t.plaque, RoundedCornerShape(6.dp)),
+        ) {
+            val s = size.width / COLS
+            for (i in 1 until COLS) drawLine(t.grid, Offset(i * s, 0f), Offset(i * s, size.height))
+            for (j in 1 until ROWS) drawLine(t.grid, Offset(0f, j * s), Offset(size.width, j * s))
+            val b = game.board
+            for (i in b.indices) if (b[i] > 0) {
+                val c = when (b[i]) { 8 -> Color(0xFF8A8F98); 9 -> t.accent; else -> t.pieces[b[i] - 1] }
+                cellAt((i % COLS) * s, (i / COLS) * s, s, c, 1f, style)
+            }
+            game.ghost()?.let { g ->
+                val gc = if (g.type == 7) Color(0xFFFF3B30) else t.pieces[g.type]
+                g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, gc, 0.25f, style) }
+            }
+            game.piece?.let { p ->
+                val pc = if (p.type == 7) Color(0xFFFF3B30) else t.pieces[p.type]
+                val st = if (p.type == 7) 4 else style
+                p.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, pc, 1f, st) }
+            }
+            val f = game.fx
+            if (f != null && prog < 1f) clearEffect(f, prog, s, t)
+        }
+        val f2 = game.fx
+        if (f2 != null && f2.count >= 2 && prog < 1f) {
+            Text(
+                if (f2.count >= 4) "TÉTRIS !" else if (f2.count == 3) "TRIPLE !" else "DOUBLE !",
+                color = Color.White, fontSize = if (f2.count >= 4) 36.sp else 22.sp, fontWeight = FontWeight.Black,
+                modifier = Modifier.align(Alignment.Center).graphicsLayer {
+                    val sc = 0.4f + minOf(1f, prog * 4f)
+                    scaleX = sc; scaleY = sc
+                    alpha = 1f - maxOf(0f, (prog - 0.7f) / 0.3f)
+                },
+            )
+        }
+        if (game.banner.isNotEmpty()) {
+            Text(
+                game.banner, color = t.board, fontWeight = FontWeight.Black, fontSize = 13.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp).clip(RoundedCornerShape(50))
+                    .background(t.accent).padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** Mini plateau de l'adversaire (mode DUEL). */
+@Composable
+fun OpponentBoard(b: IntArray, t: Theme) {
+    Canvas(Modifier.fillMaxWidth(0.75f).aspectRatio(COLS / ROWS.toFloat()).background(t.board)) {
         val s = size.width / COLS
-        for (i in 1 until COLS) drawLine(t.grid, Offset(i * s, 0f), Offset(i * s, size.height))
-        for (j in 1 until ROWS) drawLine(t.grid, Offset(0f, j * s), Offset(size.width, j * s))
-        val b = game.board
-        for (i in b.indices) if (b[i] > 0) cellAt((i % COLS) * s, (i / COLS) * s, s, when (b[i]) { 8 -> Color(0xFF8A8F98); 9 -> t.accent; else -> t.pieces[b[i] - 1] }, 1f, style)
-        game.ghost()?.let { g -> g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, t.pieces[g.type], 0.25f, style) } }
-        game.piece?.let { p -> p.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, t.pieces[p.type], 1f, style) } }
+        for (i in b.indices) if (b[i] > 0) {
+            val c = if (b[i] == 8) Color(0xFF8A8F98) else t.pieces[(b[i] - 1) % 7]
+            cellAt((i % COLS) * s, (i / COLS) * s, s, c, 1f, 2)
+        }
     }
 }
 
@@ -553,6 +687,49 @@ fun ModeVisual(m: Mode, t: Theme, modifier: Modifier) {
             Mode.PICTURE -> {
                 val rows = listOf(".#..#.", "######", "######", ".####.", "..##..")   // un petit cœur
                 rows.forEachIndexed { y, r -> r.forEachIndexed { x, ch -> if (ch == '#') cell(x, y + 1, t.accent) } }
+            }
+            Mode.MISSIONS -> {
+                val c = Offset(size.width / 2, size.height / 2)
+                drawCircle(t.accent, size.width * 0.38f, c, style = Stroke(s * 0.3f))
+                drawCircle(t.accent, size.width * 0.22f, c, style = Stroke(s * 0.3f))
+                drawCircle(t.accent, size.width * 0.07f, c)
+                drawLine(Color.White, c, Offset(c.x + s * 2.2f, c.y - s * 2.2f), s * 0.18f, StrokeCap.Round)
+            }
+            Mode.PUZZLE -> {
+                for (y in 4..5) for (x in 0 until n) if (x != 2 && x != 3) cell(x, y, p[(x + y) % 7])
+                cell(2, 1, p[1]); cell(3, 1, p[1]); cell(2, 2, p[1]); cell(3, 2, p[1])
+            }
+            Mode.CASCADE -> {
+                for (y in 3..5) cell(0, y, p[0])
+                cell(1, 5, p[1]); cell(2, 4, p[2]); cell(2, 5, p[2]); cell(4, 5, p[3])
+                cell(1, 1, p[4]); cell(4, 2, p[5])
+                for (ax in listOf(1.5f, 4.5f)) {
+                    val tri = Path()
+                    tri.moveTo(ax * s - s * 0.35f, (if (ax < 3f) 2.2f else 3.3f) * s)
+                    tri.lineTo(ax * s + s * 0.35f, (if (ax < 3f) 2.2f else 3.3f) * s)
+                    tri.lineTo(ax * s, (if (ax < 3f) 2.7f else 3.8f) * s)
+                    tri.close()
+                    drawPath(tri, t.accent)
+                }
+            }
+            Mode.DUEL -> {
+                val h = s * 0.55f
+                val oxL = s * 0.15f
+                val oxR = size.width - s * 0.15f - 5 * h
+                for (x in 0..4) { cellAt(oxL + x * h, 10 * h, h, p[x % 7], 1f, 0); cellAt(oxR + x * h, 10 * h, h, p[(x + 3) % 7], 1f, 0) }
+                for (x in 0..2) cellAt(oxL + x * h, 9 * h, h, p[(x + 1) % 7], 1f, 0)
+                for (x in 1..4) cellAt(oxR + x * h, 9 * h, h, p[(x + 2) % 7], 1f, 0)
+                cellAt(oxL, 8 * h, h, p[2], 1f, 0)
+                cellAt(oxR + 3 * h, 8 * h, h, p[5], 1f, 0)
+                drawLine(t.accent, Offset(size.width / 2, s * 0.6f), Offset(size.width / 2, size.height - s * 0.6f), s * 0.15f)
+            }
+            Mode.CHAOS -> {
+                val c = Offset(size.width / 2, size.height * 0.58f)
+                val r = size.width * 0.26f
+                drawCircle(Color(0xFF2B2B2B), r, c)
+                drawCircle(Color.White.copy(alpha = 0.35f), r * 0.25f, Offset(c.x - r * 0.35f, c.y - r * 0.35f))
+                drawLine(Color(0xFFCCCCCC), Offset(c.x + r * 0.4f, c.y - r * 0.8f), Offset(c.x + r * 0.9f, c.y - r * 1.3f), s * 0.18f, StrokeCap.Round)
+                drawCircle(t.accent, s * 0.28f, Offset(c.x + r * 0.95f, c.y - r * 1.4f))
             }
             Mode.SURVIVAL -> {
                 val g = Color(0xFF8A8F98)
