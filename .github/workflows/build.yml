@@ -4,24 +4,29 @@ on:
   workflow_dispatch:
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
       - name: Accepter les licences et installer Android 16 (API 36)
         run: |
           SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -n 1)
-          echo "sdkmanager : $SDKM"
           yes | "$SDKM" --licenses > /dev/null || true
           "$SDKM" "platforms;android-36" "build-tools;36.0.0"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: 8.11.1
-      - run: gradle assembleDebug --no-daemon
-      - uses: actions/upload-artifact@v4
+      - name: Compiler
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log
+      - name: Afficher les erreurs de compilation
+        if: failure()
+        run: grep '^e: ' build.log | sed 's/^/::error::/' || true
+      - uses: actions/upload-artifact@v7
         with:
           name: tetris-debug-apk
           path: app/build/outputs/apk/debug/*.apk
