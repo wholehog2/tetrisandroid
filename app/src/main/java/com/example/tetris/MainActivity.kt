@@ -71,6 +71,7 @@ fun TetrisApp() {
     var rshift by remember { mutableFloatStateOf(prefs.getFloat("rshift", 0f)) } // décalage de la flèche droite (dp)
     var lshift by remember { mutableFloatStateOf(prefs.getFloat("lshift", 0f)) } // décalage de la flèche gauche vers le bouton de rotation (dp)
     var showSettings by remember { mutableStateOf(false) }
+    var inMenu by remember { mutableStateOf(true) }   // écran de sélection du mode
     val zoneH = maxOf(150f, 140f * arrow + 14f)
     val t = THEMES[themeIdx]
     val haptic = LocalHapticFeedback.current
@@ -86,10 +87,14 @@ fun TetrisApp() {
     }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { game.pause() }
     BackHandler(enabled = game.state == GState.PLAYING) { game.pause() }
-    BackHandler(enabled = showSettings) { showSettings = false }
+    BackHandler(enabled = !inMenu && game.state != GState.PLAYING) { game.toMenu(); inMenu = true }
+    BackHandler(enabled = showSettings) { showSettings = false; if (game.state == GState.READY) inMenu = true }
 
     Box(Modifier.fillMaxSize()) {
         Backdrop(t)
+        if (inMenu) {
+            ModeSelect(game, t, { m -> game.start(m); inMenu = false }, { showSettings = true; inMenu = false })
+        } else {
         Column(Modifier.fillMaxSize()) {
             // ---- zone de jeu : plateau à gauche, cadres à droite ----
             Row(
@@ -106,9 +111,15 @@ fun TetrisApp() {
                         WoodPill("II", t, Modifier.size(38.dp)) { game.pause() }
                     }
                     InfoPanel("SUIVANT", t, Modifier.fillMaxWidth()) { PieceCanvas(game.next, t, style) }
-                    InfoPanel("NIVEAU", t, Modifier.fillMaxWidth(), t.accent) { Value(game.level.toString(), t) }
-                    InfoPanel("LIGNES", t, Modifier.fillMaxWidth()) { Value(game.lines.toString(), t) }
-                    InfoPanel("RECORD", t, Modifier.fillMaxWidth()) { Value(game.best.toString(), t) }
+                    InfoPanel("NIV " + game.level + " · LIGNES", t, Modifier.fillMaxWidth(), t.accent) {
+                        Value(if (game.mode == Mode.SPRINT) game.lines.toString() + "/" + SPRINT_LINES else game.lines.toString(), t)
+                    }
+                    InfoPanel(if (game.mode == Mode.ULTRA) "RESTANT" else "TEMPS", t, Modifier.fillMaxWidth()) {
+                        Value(fmtTime(if (game.mode == Mode.ULTRA) maxOf(0L, ULTRA_MS - game.timeMs) else game.timeMs), t)
+                    }
+                    InfoPanel(if (game.mode == Mode.SPRINT) "MEILLEUR" else "RECORD", t, Modifier.fillMaxWidth()) {
+                        Value(if (game.mode == Mode.SPRINT) (if (game.bestTime == 0L) "—" else fmtTime(game.bestTime)) else game.best.toString(), t)
+                    }
                     Spacer(Modifier.weight(1f))
                     WoodPill("RÉSERVE", t, Modifier.fillMaxWidth().height(44.dp)) { game.holdPiece() }
                 }
@@ -136,9 +147,9 @@ fun TetrisApp() {
                     arrow, { arrow = it }, { prefs.edit().putFloat("arrow", arrow).apply() },
                     rshift, { rshift = it }, { prefs.edit().putFloat("rshift", rshift).apply() },
                     lshift, { lshift = it }, { prefs.edit().putFloat("lshift", lshift).apply() },
-                    { showSettings = false },
+                    { showSettings = false; if (game.state == GState.READY) inMenu = true },
                 )
-            } else {
+            } else if (game.state != GState.READY) {
                 Box(
                     Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)).pointerInput(Unit) { detectTapGestures { } },
                     contentAlignment = Alignment.Center,
@@ -149,11 +160,15 @@ fun TetrisApp() {
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Text(
-                            when (game.state) { GState.READY -> "TETRIS"; GState.PAUSED -> "PAUSE"; else -> "GAME OVER" },
+                            if (game.state == GState.PAUSED) "PAUSE" else if (game.won) (if (game.mode == Mode.SPRINT) "TERMINÉ !" else "TEMPS ÉCOULÉ") else "GAME OVER",
                             color = t.accent, fontSize = 34.sp, fontWeight = FontWeight.Black,
                         )
+                        Text(game.mode.title, color = t.text.copy(alpha = 0.8f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         if (game.state == GState.OVER) {
-                            Text("Score : " + game.score + "\nRecord : " + game.best, color = t.text, textAlign = TextAlign.Center, fontSize = 18.sp)
+                            Text(
+                                "Score : " + game.score + (if (game.mode == Mode.SPRINT) "\nTemps : " + fmtTime(game.timeMs) else "") + "\n" + game.recordLabel(game.mode),
+                                color = t.text, textAlign = TextAlign.Center, fontSize = 18.sp,
+                            )
                         }
                         val btn = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board)
                         Button(
@@ -166,6 +181,11 @@ fun TetrisApp() {
                             Button(onClick = { game.start() }, colors = btn, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("RECOMMENCER") }
                         }
                         Button(
+                            onClick = { game.toMenu(); inMenu = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                        ) { Text("CHANGER DE MODE", fontWeight = FontWeight.Bold) }
+                        Button(
                             onClick = { showSettings = true },
                             colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
                             modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -173,6 +193,7 @@ fun TetrisApp() {
                     }
                 }
             }
+        }
         }
     }
 }
@@ -224,7 +245,7 @@ fun InfoPanel(title: String, t: Theme, modifier: Modifier = Modifier, titleColor
 
 @Composable
 fun Value(v: String, t: Theme) {
-    Text(v, color = t.text, fontSize = 20.sp, fontWeight = FontWeight.Black, maxLines = 1)
+    Text(v, color = t.text, fontSize = 17.sp, fontWeight = FontWeight.Black, maxLines = 1)
 }
 
 val STYLES = listOf("Biseauté", "Arrondi", "Plat", "Contour", "Bulle")
@@ -271,7 +292,7 @@ fun BoardView(game: Game, t: Theme, style: Int) {
         for (i in 1 until COLS) drawLine(t.grid, Offset(i * s, 0f), Offset(i * s, size.height))
         for (j in 1 until ROWS) drawLine(t.grid, Offset(0f, j * s), Offset(size.width, j * s))
         val b = game.board
-        for (i in b.indices) if (b[i] > 0) cellAt((i % COLS) * s, (i / COLS) * s, s, t.pieces[b[i] - 1], 1f, style)
+        for (i in b.indices) if (b[i] > 0) cellAt((i % COLS) * s, (i / COLS) * s, s, if (b[i] == 8) Color(0xFF8A8F98) else t.pieces[b[i] - 1], 1f, style)
         game.ghost()?.let { g -> g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, t.pieces[g.type], 0.25f, style) } }
         game.piece?.let { p -> p.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, t.pieces[p.type], 1f, style) } }
     }
@@ -481,4 +502,78 @@ fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<F
         value = value, onValueChange = onChange, onValueChangeFinished = onDone, valueRange = range,
         colors = SliderDefaults.colors(thumbColor = t.accent, activeTrackColor = t.accent, inactiveTrackColor = t.plaque),
     )
+}
+
+// ---------- écran de sélection du mode ----------
+
+@Composable
+fun ModeSelect(game: Game, t: Theme, onPick: (Mode) -> Unit, onSettings: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("TETRIS", color = t.accent, fontSize = 38.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.CenterHorizontally))
+        Text("Choisissez un mode de jeu", color = t.text.copy(alpha = 0.85f), fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Mode.values().forEach { m -> ModeCard(m, game.recordLabel(m), t) { onPick(m) } }
+        }
+        Button(
+            onClick = onSettings, modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+        ) { Text("RÉGLAGES", fontWeight = FontWeight.Bold) }
+    }
+}
+
+@Composable
+fun ModeCard(m: Mode, record: String, t: Theme, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(t.plaque).clickable { onClick() }.padding(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ModeVisual(m, t, Modifier.size(84.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(m.title, color = t.accent, fontSize = 17.sp, fontWeight = FontWeight.Black)
+            Text(m.desc, color = t.onPlaque, fontSize = 12.sp, lineHeight = 16.sp)
+            Text(record, color = t.onPlaque.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+/** Petite illustration du mode, dessinée avec les couleurs du thème. */
+@Composable
+fun ModeVisual(m: Mode, t: Theme, modifier: Modifier) {
+    Canvas(modifier.clip(RoundedCornerShape(12.dp)).background(t.board).border(2.dp, t.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))) {
+        val n = 6
+        val s = size.width / n
+        val p = t.pieces
+        fun cell(x: Int, y: Int, c: Color) = cellAt(x * s, y * s, s, c, 1f, 0)
+        when (m) {
+            Mode.CLASSIC -> {
+                for (x in 0..4) cell(x, 5, p[x % 7])
+                cell(5, 5, p[4])
+                for (x in 0..2) cell(x, 4, p[(x + 3) % 7])
+                cell(2, 1, p[2]); cell(3, 1, p[2]); cell(4, 1, p[2]); cell(3, 2, p[2])
+            }
+            Mode.SPRINT -> {
+                for (y in 0..1) for (x in 0 until n) cell(x, y, if ((x + y) % 2 == 0) Color.White else Color(0xFF222222))
+                for (y in 3..5) for (x in 0 until n) if (x != 4) cell(x, y, p[(x + y) % 7])
+            }
+            Mode.ULTRA -> {
+                val c = Offset(size.width / 2, size.height / 2 + s * 0.3f)
+                val r = size.width * 0.34f
+                drawCircle(t.accent, r, c, style = Stroke(s * 0.35f))
+                drawLine(t.accent, c, Offset(c.x, c.y - r * 0.65f), s * 0.3f, StrokeCap.Round)
+                drawLine(t.accent, c, Offset(c.x + r * 0.45f, c.y + r * 0.2f), s * 0.3f, StrokeCap.Round)
+                drawRect(t.accent, Offset(c.x - s * 0.3f, c.y - r - s * 0.7f), Size(s * 0.6f, s * 0.4f))
+            }
+            Mode.SURVIVAL -> {
+                val g = Color(0xFF8A8F98)
+                for (y in 4..5) for (x in 0 until n) if (x != (if (y == 5) 2 else 4)) cell(x, y, g)
+                cell(1, 3, p[0]); cell(2, 3, p[0]); cell(2, 2, p[1])
+                val tri = Path()
+                tri.moveTo(s * 4.5f, s * 0.4f); tri.lineTo(s * 5.4f, s * 1.6f); tri.lineTo(s * 3.6f, s * 1.6f); tri.close()
+                drawPath(tri, t.accent)
+            }
+        }
+    }
 }

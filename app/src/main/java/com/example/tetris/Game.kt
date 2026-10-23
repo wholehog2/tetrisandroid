@@ -12,6 +12,18 @@ private const val MAX_RESETS = 15  // nombre max de déplacements/rotations qui 
 
 enum class GState { READY, PLAYING, PAUSED, OVER }
 
+enum class Mode(val title: String, val desc: String) {
+    CLASSIC("CLASSIQUE", "Le Tetris traditionnel : la vitesse augmente tous les 10 lignes. Tenez le plus longtemps possible !"),
+    SPRINT("SPRINT 40 LIGNES", "Effacez 40 lignes le plus vite possible. Le chrono tourne : battez votre meilleur temps !"),
+    ULTRA("CONTRE-LA-MONTRE", "Vous avez 2 minutes pour faire le meilleur score. Quand le temps est écoulé, c'est fini."),
+    SURVIVAL("SURVIE", "Des lignes pirates remontent du bas de plus en plus vite. Effacez-les avant d'être submergé !"),
+}
+
+const val SPRINT_LINES = 40
+const val ULTRA_MS = 120_000L
+
+fun fmtTime(ms: Long): String = "%02d:%02d.%d".format(ms / 60000, (ms / 1000) % 60, (ms / 100) % 10)
+
 /** Ordre des pièces : I, O, T, S, Z, J, L — 4 rotations pré-calculées. */
 val SHAPES: List<List<List<Pair<Int, Int>>>> = listOf(
     4 to listOf(0 to 1, 1 to 1, 2 to 1, 3 to 1),
@@ -38,7 +50,11 @@ class Game(private val prefs: SharedPreferences) {
     var hold by mutableIntStateOf(-1)
     var score by mutableIntStateOf(0)
     var lines by mutableIntStateOf(0)
-    var best by mutableIntStateOf(prefs.getInt("best", 0))
+    var best by mutableIntStateOf(0)            // meilleur score du mode en cours
+    var bestTime by mutableLongStateOf(0L)      // sprint : meilleur temps (0 = aucun)
+    var mode by mutableStateOf(Mode.CLASSIC)
+    var won by mutableStateOf(false)
+    var timeMs by mutableLongStateOf(0L)        // temps de jeu actif (arrondi au dixième)
     var state by mutableStateOf(GState.READY)
     var onEvent: (Int) -> Unit = {}   // 0 = pose, n>0 = n lignes
 
@@ -50,6 +66,9 @@ class Game(private val prefs: SharedPreferences) {
     private var lastFall = 0L
     private var lockAt = 0L
     private var lockResets = 0
+    private var lastTickAt = 0L
+    private var timeAcc = 0L
+    private var garbageAt = 0L
 
     private fun resetTimers() { lastFall = SystemClock.uptimeMillis(); lockAt = 0L; lockResets = 0 }
 
@@ -63,10 +82,29 @@ class Game(private val prefs: SharedPreferences) {
         return bag.removeAt(bag.lastIndex)
     }
 
-    fun start() {
-        board = IntArray(COLS * ROWS); score = 0; lines = 0; hold = -1
-        bag.clear(); next = draw(); state = GState.PLAYING; spawnNext()
+    private fun loadBest(m: Mode) {
+        best = prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+        bestTime = prefs.getLong("time_SPRINT", 0L)
     }
+
+    /** Texte du record affiché sur l'écran de sélection. */
+    fun recordLabel(m: Mode): String {
+        if (m == Mode.SPRINT) {
+            val t = prefs.getLong("time_SPRINT", 0L)
+            return if (t == 0L) "Meilleur temps : —" else "Meilleur temps : " + fmtTime(t)
+        }
+        return "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+    }
+
+    fun start(m: Mode = mode) {
+        mode = m; won = false; timeAcc = 0L; timeMs = 0L; loadBest(m)
+        board = IntArray(COLS * ROWS); score = 0; lines = 0; hold = -1
+        bag.clear(); next = draw(); state = GState.PLAYING
+        lastTickAt = SystemClock.uptimeMillis(); garbageAt = 15_000L
+        spawnNext()
+    }
+
+    fun toMenu() { state = GState.READY }
 
     fun pause() { if (state == GState.PLAYING) state = GState.PAUSED }
     fun resume() {
@@ -74,6 +112,7 @@ class Game(private val prefs: SharedPreferences) {
         state = GState.PLAYING
         val now = SystemClock.uptimeMillis()
         lastFall = now
+        lastTickAt = now
         if (lockAt != 0L) lockAt = now
     }
 
@@ -88,9 +127,34 @@ class Game(private val prefs: SharedPreferences) {
 
     private fun spawnNext() { val t = next; next = draw(); spawn(t) }
 
-    private fun gameOver() {
-        state = GState.OVER
-        if (score > best) { best = score; prefs.edit().putInt("best", best).apply() }
+    private fun saveBest() {
+        if (mode != Mode.SPRINT && score > best) { best = score; prefs.edit().putInt("best_" + mode.name, best).apply() }
+    }
+
+    private fun gameOver() { won = false; state = GState.OVER; saveBest() }
+
+    private fun finish() {
+        won = true; state = GState.OVER; timeMs = timeAcc
+        if (mode == Mode.SPRINT && (bestTime == 0L || timeAcc < bestTime)) {
+            bestTime = timeAcc; prefs.edit().putLong("time_SPRINT", timeAcc).apply()
+        }
+        saveBest()
+    }
+
+    /** Survie : une ligne pirate (avec un trou) remonte du bas ; si le haut est occupé, c'est perdu. */
+    private fun addGarbage() {
+        val topOccupied = (0 until COLS).any { board[it] != 0 }
+        val nb = IntArray(COLS * ROWS)
+        System.arraycopy(board, COLS, nb, 0, (ROWS - 1) * COLS)
+        val hole = (0 until COLS).random()
+        for (x in 0 until COLS) nb[(ROWS - 1) * COLS + x] = if (x == hole) 0 else 8
+        board = nb
+        if (topOccupied) { gameOver(); return }
+        val p = piece
+        if (p != null && !fits(p)) {
+            val up = p.copy(y = p.y - 1)
+            if (fits(up)) piece = up else gameOver()
+        }
     }
 
     fun move(dx: Int) {
@@ -114,8 +178,17 @@ class Game(private val prefs: SharedPreferences) {
 
     /** Appelée très souvent : fait tomber la pièce selon le niveau, puis la verrouille LOCK_MS après qu'elle a touché. */
     fun tick(now: Long) {
-        val p = piece ?: return
         if (state != GState.PLAYING) return
+        timeAcc += now - lastTickAt; lastTickAt = now
+        val shown = timeAcc / 100 * 100
+        if (shown != timeMs) timeMs = shown
+        if (mode == Mode.ULTRA && timeAcc >= ULTRA_MS) { timeAcc = ULTRA_MS; finish(); return }
+        if (mode == Mode.SURVIVAL && timeAcc >= garbageAt) {
+            addGarbage()
+            garbageAt = timeAcc + maxOf(6000L, 15000L - (timeAcc / 20000L) * 1000L)
+            if (state != GState.PLAYING) return
+        }
+        val p = piece ?: return
         val q = p.copy(y = p.y + 1)
         if (fits(q)) {
             lockAt = 0L
@@ -166,8 +239,9 @@ class Game(private val prefs: SharedPreferences) {
         val lv = level
         board = nb
         if (cleared > 0) { score += intArrayOf(0, 100, 300, 500, 800)[cleared] * lv; lines += cleared }
-        if (score > best) { best = score; prefs.edit().putInt("best", best).apply() }
+        saveBest()
         onEvent(cleared)
+        if (mode == Mode.SPRINT && lines >= SPRINT_LINES) { finish(); return }
         spawnNext()
     }
 }
