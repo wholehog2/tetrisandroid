@@ -14,15 +14,19 @@ enum class GState { READY, PLAYING, PAUSED, OVER }
 
 enum class Mode(val title: String, val desc: String) {
     CLASSIC("CLASSIQUE", "Le Tetris traditionnel : la vitesse augmente tous les 10 lignes. Tenez le plus longtemps possible !"),
-    SPRINT("SPRINT 40 LIGNES", "Effacez 40 lignes le plus vite possible. Le chrono tourne : battez votre meilleur temps !"),
-    ULTRA("CONTRE-LA-MONTRE", "Vous avez 2 minutes pour faire le meilleur score. Quand le temps est écoulé, c'est fini."),
+    PICTURE("DESSIN", "Le plateau démarre avec des lignes incomplètes qui forment un dessin. Complétez-les pour effacer le tableau, puis passez au suivant !"),
     SURVIVAL("SURVIE", "Des lignes pirates remontent du bas de plus en plus vite. Effacez-les avant d'être submergé !"),
 }
 
-const val SPRINT_LINES = 40
-const val ULTRA_MS = 120_000L
-
 fun fmtTime(ms: Long): String = "%02d:%02d.%d".format(ms / 60000, (ms / 1000) % 60, (ms / 100) % 10)
+
+/** Dessins de départ du mode DESSIN : '#' = bloc, '.' = vide. Toutes les lignes sont incomplètes. */
+val PICTURES: List<List<String>> = listOf(
+    listOf(".###..###.", ".########.", ".########.", "..######..", "...####...", "....##...."),                              // cœur
+    listOf("....##....", "...####...", "..######..", "...####...", "..######..", ".########.", "....##....", "....##...."), // sapin
+    listOf("....##....", "...####...", "..######..", ".########.", "....##....", "....##....", "....##...."),               // flèche
+    listOf("....##....", "...####...", "..######..", ".########.", "..######..", "...####...", "....##...."),               // diamant
+)
 
 /** Ordre des pièces : I, O, T, S, Z, J, L — 4 rotations pré-calculées. */
 val SHAPES: List<List<List<Pair<Int, Int>>>> = listOf(
@@ -51,9 +55,8 @@ class Game(private val prefs: SharedPreferences) {
     var score by mutableIntStateOf(0)
     var lines by mutableIntStateOf(0)
     var best by mutableIntStateOf(0)            // meilleur score du mode en cours
-    var bestTime by mutableLongStateOf(0L)      // sprint : meilleur temps (0 = aucun)
     var mode by mutableStateOf(Mode.CLASSIC)
-    var won by mutableStateOf(false)
+    var picture by mutableIntStateOf(1)         // mode DESSIN : numéro du tableau en cours
     var timeMs by mutableLongStateOf(0L)        // temps de jeu actif (arrondi au dixième)
     var state by mutableStateOf(GState.READY)
     var onEvent: (Int) -> Unit = {}   // 0 = pose, n>0 = n lignes
@@ -84,21 +87,27 @@ class Game(private val prefs: SharedPreferences) {
 
     private fun loadBest(m: Mode) {
         best = prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
-        bestTime = prefs.getLong("time_SPRINT", 0L)
     }
 
     /** Texte du record affiché sur l'écran de sélection. */
-    fun recordLabel(m: Mode): String {
-        if (m == Mode.SPRINT) {
-            val t = prefs.getLong("time_SPRINT", 0L)
-            return if (t == 0L) "Meilleur temps : —" else "Meilleur temps : " + fmtTime(t)
+    fun recordLabel(m: Mode): String =
+        "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+
+    /** Plateau de départ d'un tableau : les blocs du dessin portent la valeur 9. */
+    private fun pictureBoard(index: Int): IntArray {
+        val pic = PICTURES[index % PICTURES.size]
+        val b = IntArray(COLS * ROWS)
+        pic.forEachIndexed { i, row ->
+            val y = ROWS - pic.size + i
+            row.forEachIndexed { x, ch -> if (ch == '#') b[y * COLS + x] = 9 }
         }
-        return "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+        return b
     }
 
     fun start(m: Mode = mode) {
-        mode = m; won = false; timeAcc = 0L; timeMs = 0L; loadBest(m)
-        board = IntArray(COLS * ROWS); score = 0; lines = 0; hold = -1
+        mode = m; timeAcc = 0L; timeMs = 0L; picture = 1; loadBest(m)
+        board = if (m == Mode.PICTURE) pictureBoard(0) else IntArray(COLS * ROWS)
+        score = 0; lines = 0; hold = -1
         bag.clear(); next = draw(); state = GState.PLAYING
         lastTickAt = SystemClock.uptimeMillis(); garbageAt = 15_000L
         spawnNext()
@@ -128,18 +137,10 @@ class Game(private val prefs: SharedPreferences) {
     private fun spawnNext() { val t = next; next = draw(); spawn(t) }
 
     private fun saveBest() {
-        if (mode != Mode.SPRINT && score > best) { best = score; prefs.edit().putInt("best_" + mode.name, best).apply() }
+        if (score > best) { best = score; prefs.edit().putInt("best_" + mode.name, best).apply() }
     }
 
-    private fun gameOver() { won = false; state = GState.OVER; saveBest() }
-
-    private fun finish() {
-        won = true; state = GState.OVER; timeMs = timeAcc
-        if (mode == Mode.SPRINT && (bestTime == 0L || timeAcc < bestTime)) {
-            bestTime = timeAcc; prefs.edit().putLong("time_SPRINT", timeAcc).apply()
-        }
-        saveBest()
-    }
+    private fun gameOver() { state = GState.OVER; saveBest() }
 
     /** Survie : une ligne pirate (avec un trou) remonte du bas ; si le haut est occupé, c'est perdu. */
     private fun addGarbage() {
@@ -182,7 +183,6 @@ class Game(private val prefs: SharedPreferences) {
         timeAcc += now - lastTickAt; lastTickAt = now
         val shown = timeAcc / 100 * 100
         if (shown != timeMs) timeMs = shown
-        if (mode == Mode.ULTRA && timeAcc >= ULTRA_MS) { timeAcc = ULTRA_MS; finish(); return }
         if (mode == Mode.SURVIVAL && timeAcc >= garbageAt) {
             addGarbage()
             garbageAt = timeAcc + maxOf(6000L, 15000L - (timeAcc / 20000L) * 1000L)
@@ -239,9 +239,11 @@ class Game(private val prefs: SharedPreferences) {
         val lv = level
         board = nb
         if (cleared > 0) { score += intArrayOf(0, 100, 300, 500, 800)[cleared] * lv; lines += cleared }
+        if (mode == Mode.PICTURE && nb.none { it == 9 }) {   // tableau terminé : bonus et dessin suivant
+            score += 1000; picture++; board = pictureBoard(picture - 1)
+        }
         saveBest()
         onEvent(cleared)
-        if (mode == Mode.SPRINT && lines >= SPRINT_LINES) { finish(); return }
         spawnNext()
     }
 }

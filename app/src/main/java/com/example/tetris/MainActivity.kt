@@ -111,15 +111,11 @@ fun TetrisApp() {
                         WoodPill("II", t, Modifier.size(38.dp)) { game.pause() }
                     }
                     InfoPanel("SUIVANT", t, Modifier.fillMaxWidth()) { PieceCanvas(game.next, t, style) }
-                    InfoPanel("NIV " + game.level + " · LIGNES", t, Modifier.fillMaxWidth(), t.accent) {
-                        Value(if (game.mode == Mode.SPRINT) game.lines.toString() + "/" + SPRINT_LINES else game.lines.toString(), t)
+                    InfoPanel("NIV " + game.level + " · LIGNES", t, Modifier.fillMaxWidth(), t.accent) { Value(game.lines.toString(), t) }
+                    InfoPanel(if (game.mode == Mode.PICTURE) "TABLEAU" else "TEMPS", t, Modifier.fillMaxWidth()) {
+                        Value(if (game.mode == Mode.PICTURE) game.picture.toString() else fmtTime(game.timeMs), t)
                     }
-                    InfoPanel(if (game.mode == Mode.ULTRA) "RESTANT" else "TEMPS", t, Modifier.fillMaxWidth()) {
-                        Value(fmtTime(if (game.mode == Mode.ULTRA) maxOf(0L, ULTRA_MS - game.timeMs) else game.timeMs), t)
-                    }
-                    InfoPanel(if (game.mode == Mode.SPRINT) "MEILLEUR" else "RECORD", t, Modifier.fillMaxWidth()) {
-                        Value(if (game.mode == Mode.SPRINT) (if (game.bestTime == 0L) "—" else fmtTime(game.bestTime)) else game.best.toString(), t)
-                    }
+                    InfoPanel("RECORD", t, Modifier.fillMaxWidth()) { Value(game.best.toString(), t) }
                     Spacer(Modifier.weight(1f))
                     WoodPill("RÉSERVE", t, Modifier.fillMaxWidth().height(44.dp)) { game.holdPiece() }
                 }
@@ -160,13 +156,13 @@ fun TetrisApp() {
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Text(
-                            if (game.state == GState.PAUSED) "PAUSE" else if (game.won) (if (game.mode == Mode.SPRINT) "TERMINÉ !" else "TEMPS ÉCOULÉ") else "GAME OVER",
+                            if (game.state == GState.PAUSED) "PAUSE" else "GAME OVER",
                             color = t.accent, fontSize = 34.sp, fontWeight = FontWeight.Black,
                         )
                         Text(game.mode.title, color = t.text.copy(alpha = 0.8f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         if (game.state == GState.OVER) {
                             Text(
-                                "Score : " + game.score + (if (game.mode == Mode.SPRINT) "\nTemps : " + fmtTime(game.timeMs) else "") + "\n" + game.recordLabel(game.mode),
+                                "Score : " + game.score + (if (game.mode == Mode.PICTURE) "\nTableau : " + game.picture else "") + "\n" + game.recordLabel(game.mode),
                                 color = t.text, textAlign = TextAlign.Center, fontSize = 18.sp,
                             )
                         }
@@ -292,7 +288,7 @@ fun BoardView(game: Game, t: Theme, style: Int) {
         for (i in 1 until COLS) drawLine(t.grid, Offset(i * s, 0f), Offset(i * s, size.height))
         for (j in 1 until ROWS) drawLine(t.grid, Offset(0f, j * s), Offset(size.width, j * s))
         val b = game.board
-        for (i in b.indices) if (b[i] > 0) cellAt((i % COLS) * s, (i / COLS) * s, s, if (b[i] == 8) Color(0xFF8A8F98) else t.pieces[b[i] - 1], 1f, style)
+        for (i in b.indices) if (b[i] > 0) cellAt((i % COLS) * s, (i / COLS) * s, s, when (b[i]) { 8 -> Color(0xFF8A8F98); 9 -> t.accent; else -> t.pieces[b[i] - 1] }, 1f, style)
         game.ghost()?.let { g -> g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, t.pieces[g.type], 0.25f, style) } }
         game.piece?.let { p -> p.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, t.pieces[p.type], 1f, style) } }
     }
@@ -554,17 +550,9 @@ fun ModeVisual(m: Mode, t: Theme, modifier: Modifier) {
                 for (x in 0..2) cell(x, 4, p[(x + 3) % 7])
                 cell(2, 1, p[2]); cell(3, 1, p[2]); cell(4, 1, p[2]); cell(3, 2, p[2])
             }
-            Mode.SPRINT -> {
-                for (y in 0..1) for (x in 0 until n) cell(x, y, if ((x + y) % 2 == 0) Color.White else Color(0xFF222222))
-                for (y in 3..5) for (x in 0 until n) if (x != 4) cell(x, y, p[(x + y) % 7])
-            }
-            Mode.ULTRA -> {
-                val c = Offset(size.width / 2, size.height / 2 + s * 0.3f)
-                val r = size.width * 0.34f
-                drawCircle(t.accent, r, c, style = Stroke(s * 0.35f))
-                drawLine(t.accent, c, Offset(c.x, c.y - r * 0.65f), s * 0.3f, StrokeCap.Round)
-                drawLine(t.accent, c, Offset(c.x + r * 0.45f, c.y + r * 0.2f), s * 0.3f, StrokeCap.Round)
-                drawRect(t.accent, Offset(c.x - s * 0.3f, c.y - r - s * 0.7f), Size(s * 0.6f, s * 0.4f))
+            Mode.PICTURE -> {
+                val rows = listOf(".#..#.", "######", "######", ".####.", "..##..")   // un petit cœur
+                rows.forEachIndexed { y, r -> r.forEachIndexed { x, ch -> if (ch == '#') cell(x, y + 1, t.accent) } }
             }
             Mode.SURVIVAL -> {
                 val g = Color(0xFF8A8F98)
