@@ -436,7 +436,7 @@ class Game(private val prefs: SharedPreferences) {
         }
         val p = piece
         if (p != null) {
-            var q = p
+            var q: Piece = p
             var tries = 0
             while (!fits(q) && tries <= rows) { q = q.copy(y = q.y - 1); tries++ }
             if (fits(q)) piece = q else gameOver()
