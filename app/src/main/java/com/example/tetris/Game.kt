@@ -1,10 +1,14 @@
 package com.example.tetris
 
 import android.content.SharedPreferences
+import android.os.SystemClock
 import androidx.compose.runtime.*
 
 const val COLS = 10
 const val ROWS = 20
+
+private const val LOCK_MS = 500L   // délai avant verrouillage d'une pièce posée
+private const val MAX_RESETS = 15  // nombre max de déplacements/rotations qui repoussent le verrouillage
 
 enum class GState { READY, PLAYING, PAUSED, OVER }
 
@@ -43,6 +47,16 @@ class Game(private val prefs: SharedPreferences) {
 
     private var bag = mutableListOf<Int>()
     private var canHold = true
+    private var lastFall = 0L
+    private var lockAt = 0L
+    private var lockResets = 0
+
+    private fun resetTimers() { lastFall = SystemClock.uptimeMillis(); lockAt = 0L; lockResets = 0 }
+
+    /** Un déplacement ou une rotation réussis repoussent le verrouillage, mais pas indéfiniment. */
+    private fun touched() {
+        if (lockAt != 0L && lockResets < MAX_RESETS) { lockAt = SystemClock.uptimeMillis(); lockResets++ }
+    }
 
     private fun draw(): Int {
         if (bag.isEmpty()) bag = (0..6).shuffled().toMutableList()
@@ -55,14 +69,20 @@ class Game(private val prefs: SharedPreferences) {
     }
 
     fun pause() { if (state == GState.PLAYING) state = GState.PAUSED }
-    fun resume() { if (state == GState.PAUSED) state = GState.PLAYING }
+    fun resume() {
+        if (state != GState.PAUSED) return
+        state = GState.PLAYING
+        val now = SystemClock.uptimeMillis()
+        lastFall = now
+        if (lockAt != 0L) lockAt = now
+    }
 
     private fun fits(p: Piece) = p.cells.all { (x, y) ->
         x in 0 until COLS && y < ROWS && (y < 0 || board[y * COLS + x] == 0)
     }
 
     private fun spawn(t: Int) {
-        val p = Piece(t); piece = p; canHold = true
+        val p = Piece(t); piece = p; canHold = true; resetTimers()
         if (!fits(p)) gameOver()
     }
 
@@ -76,28 +96,34 @@ class Game(private val prefs: SharedPreferences) {
     fun move(dx: Int) {
         val p = piece ?: return
         if (state != GState.PLAYING) return
-        p.copy(x = p.x + dx).let { if (fits(it)) piece = it }
+        p.copy(x = p.x + dx).let { if (fits(it)) { piece = it; touched() } }
     }
 
     fun rotate() {
         val p = piece ?: return
         if (state != GState.PLAYING) return
+        if (!fits(p.copy(y = p.y + 1))) return   // la pièce touche : plus de rotation possible
         val r = (p.rot + 1) % 4
         for (k in intArrayOf(0, -1, 1, -2, 2)) {          // « wall kicks » simplifiés
             val q = p.copy(rot = r, x = p.x + k)
-            if (fits(q)) { piece = q; return }
+            if (fits(q)) { piece = q; touched(); return }
             val up = q.copy(y = q.y - 1)
-            if (fits(up)) { piece = up; return }
+            if (fits(up)) { piece = up; touched(); return }
         }
     }
 
-    /** Gravité : renvoie true si la pièce a été posée. */
-    fun step(): Boolean {
-        val p = piece ?: return false
-        if (state != GState.PLAYING) return false
+    /** Appelée très souvent : fait tomber la pièce selon le niveau, puis la verrouille LOCK_MS après qu'elle a touché. */
+    fun tick(now: Long) {
+        val p = piece ?: return
+        if (state != GState.PLAYING) return
         val q = p.copy(y = p.y + 1)
-        if (fits(q)) { piece = q; return false }
-        lock(); return true
+        if (fits(q)) {
+            lockAt = 0L
+            if (now - lastFall >= delayMs) { piece = q; lastFall = now; lockResets = 0 }
+        } else {
+            if (lockAt == 0L) lockAt = now
+            if (now - lockAt >= LOCK_MS) lock()
+        }
     }
 
     /** Descend d'une ligne sans verrouiller (le verrouillage reste géré par la gravité). */
