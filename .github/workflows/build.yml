@@ -25,7 +25,8 @@ jobs:
           gradle assembleDebug --no-daemon 2>&1 | tee build.log
       - name: Afficher les erreurs de compilation
         if: failure()
-        run: grep '^e: ' build.log | sed 's/^/::error::/' || true
+        run: |
+          grep '^e: ' build.log | sed 's/^/::error::/' || true
       - uses: actions/upload-artifact@v7
         with:
           name: tetris-debug-apk
