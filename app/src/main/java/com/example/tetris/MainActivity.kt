@@ -309,6 +309,22 @@ private fun DrawScope.cellAt(px: Float, py: Float, s: Float, c: Color, a: Float 
     }
 }
 
+/** Bloc « à effacer » : bleu glacier avec un halo bleu qui pulse doucement. */
+private fun DrawScope.pictureCell(px: Float, py: Float, s: Float, pulse: Float) {
+    val halo = Color(0xFF4DB8FF)
+    val pad = s * 0.04f
+    val glow = 0.35f + 0.5f * pulse
+    for (k in 3 downTo 1) {
+        val e = s * 0.09f * k
+        drawRoundRect(
+            halo.copy(alpha = glow * 0.22f), Offset(px + pad - e, py + pad - e),
+            Size(s - 2 * pad + 2 * e, s - 2 * pad + 2 * e), CornerRadius(s * 0.1f + e),
+        )
+    }
+    drawRoundRect(lerp(Color(0xFFA8E4FF), Color.White, pulse * 0.5f), Offset(px + pad, py + pad), Size(s - 2 * pad, s - 2 * pad), CornerRadius(s * 0.1f))
+    drawRoundRect(Color.White.copy(alpha = 0.55f), Offset(px + s * 0.17f, py + s * 0.17f), Size(s * 0.66f, s * 0.2f), CornerRadius(s * 0.08f))
+}
+
 private val RAINBOW = listOf(
     Color(0xFFFF3B30), Color(0xFFFFCC00), Color(0xFF34C759), Color(0xFF00C7FF), Color(0xFF5E5CE6), Color(0xFFFF2D92), Color(0xFFFF3B30),
 )
@@ -362,6 +378,15 @@ private fun DrawScope.clearEffect(f: ClearFx, ph: Float, s: Float, t: Theme) {
 fun BoardView(game: Game, t: Theme, style: Int) {
     val fx = game.fx
     var prog by remember { mutableFloatStateOf(1f) }
+    var pulse by remember { mutableFloatStateOf(0f) }   // 0..1, pour le halo des blocs à effacer
+    LaunchedEffect(game.mode) {
+        if (game.mode == Mode.PICTURE || game.mode == Mode.PUZZLE) {
+            while (true) {
+                val tNs = withFrameNanos { it }
+                pulse = ((sin(tNs / 1_000_000_000.0 * 2.6) + 1.0) / 2.0).toFloat()
+            }
+        }
+    }
     LaunchedEffect(fx?.id) {
         val f = fx
         if (f != null) {
@@ -391,10 +416,11 @@ fun BoardView(game: Game, t: Theme, style: Int) {
             for (i in 1 until COLS) drawLine(t.grid, Offset(i * s, 0f), Offset(i * s, size.height))
             for (j in 1 until ROWS) drawLine(t.grid, Offset(0f, j * s), Offset(size.width, j * s))
             val b = game.board
-            for (i in b.indices) if (b[i] > 0) {
-                val c = when (b[i]) { 8 -> Color(0xFF8A8F98); 9 -> t.accent; else -> t.pieces[b[i] - 1] }
+            for (i in b.indices) if (b[i] > 0 && b[i] != 9) {
+                val c = if (b[i] == 8) Color(0xFF8A8F98) else t.pieces[b[i] - 1]
                 cellAt((i % COLS) * s, (i / COLS) * s, s, c, 1f, style)
             }
+            for (i in b.indices) if (b[i] == 9) pictureCell((i % COLS) * s, (i / COLS) * s, s, pulse)
             game.ghost()?.let { g ->
                 val gc = if (g.type == 7) Color(0xFFFF3B30) else t.pieces[g.type]
                 g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, gc, 0.25f, style) }
@@ -699,7 +725,7 @@ fun ModeVisual(m: Mode, t: Theme, modifier: Modifier) {
             }
             Mode.PICTURE -> {
                 val rows = listOf(".#..#.", "######", "######", ".####.", "..##..")   // un petit cœur
-                rows.forEachIndexed { y, r -> r.forEachIndexed { x, ch -> if (ch == '#') cell(x, y + 1, t.accent) } }
+                rows.forEachIndexed { y, r -> r.forEachIndexed { x, ch -> if (ch == '#') cell(x, y + 1, Color(0xFFA8E4FF)) } }
             }
             Mode.MISSIONS -> {
                 val c = Offset(size.width / 2, size.height / 2)
