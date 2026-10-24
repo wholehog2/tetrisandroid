@@ -130,7 +130,7 @@ fun TetrisApp() {
                     InfoPanel("SUIVANT", t, Modifier.fillMaxWidth()) { PieceCanvas(game.next, t, style) }
                     InfoPanel("NIV " + game.level + " · LIGNES", t, Modifier.fillMaxWidth(), t.accent) { Value(game.lines.toString(), t) }
                     when (game.mode) {
-                        Mode.PICTURE -> InfoPanel("TABLEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString(), t) }
+                        Mode.PICTURE -> InfoPanel("TABLEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PICTURES.size, t) }
                         Mode.PUZZLE -> {
                             InfoPanel("NIVEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PUZZLES.size, t) }
                             InfoPanel("PIÈCES", t, Modifier.fillMaxWidth()) { Value(game.piecesLeft.toString(), t) }
