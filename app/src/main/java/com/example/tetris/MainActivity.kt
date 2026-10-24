@@ -107,6 +107,19 @@ fun TetrisApp() {
             ) {
                 Column(Modifier.weight(2.3f).fillMaxHeight()) {
                     ScoreBar(game.score, t)
+                    if (game.mode == Mode.CHAOS) {   // hauteur fixe : le plateau ne bouge pas quand l'événement change
+                        val on = game.chaosLabel.isNotEmpty()
+                        Box(
+                            Modifier.fillMaxWidth().height(30.dp).background(if (on) Color(0xFFE53935) else t.well),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                if (on) "⚠ " + game.chaosLabel else "Pas d'événement",
+                                color = if (on) Color.White else t.text.copy(alpha = 0.5f),
+                                fontSize = 15.sp, fontWeight = FontWeight.Black, maxLines = 1,
+                            )
+                        }
+                    }
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopStart) { BoardView(game, t, style) }
                 }
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {

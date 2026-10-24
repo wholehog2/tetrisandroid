@@ -29,10 +29,12 @@ fun fmtTime(ms: Long): String = "%02d:%02d.%d".format(ms / 60000, (ms / 1000) % 
 
 /** Dessins de départ du mode DESSIN : '#' = bloc, '.' = vide. Toutes les lignes sont incomplètes. */
 val PICTURES: List<List<String>> = listOf(
-    listOf(".###..###.", ".########.", ".########.", "..######..", "...####...", "....##...."),                              // cœur
-    listOf("....##....", "...####...", "..######..", "...####...", "..######..", ".########.", "....##....", "....##...."), // sapin
+    listOf("....##....", "...####...", "..######.."),                                                                          // pyramide (facile)
+    listOf(".........#", ".......###", ".....#####", "...#######"),                                                               // escalier
     listOf("....##....", "...####...", "..######..", ".########.", "....##....", "....##....", "....##...."),               // flèche
+    listOf(".###..###.", ".########.", ".########.", "..######..", "...####...", "....##...."),                              // cœur
     listOf("....##....", "...####...", "..######..", ".########.", "..######..", "...####...", "....##...."),               // diamant
+    listOf("....##....", "...####...", "..######..", "...####...", "..######..", ".########.", "....##....", "....##...."), // sapin
 )
 
 /** Niveau du mode PUZZLE : plateau de départ (du haut vers le bas) et pièces imposées (0=I 1=O 2=T 3=S 4=Z 5=J 6=L). */
@@ -94,18 +96,20 @@ class Game(private val prefs: SharedPreferences) {
     var missions by mutableStateOf<List<Pair<Int, Int>>>(emptyList())   // (lignes d'un coup, fois restantes)
     var oppBoard by mutableStateOf(IntArray(COLS * ROWS))
     var piecesLeft by mutableIntStateOf(0)
+    var chaosLabel by mutableStateOf("")      // CHAOS : événement actif sur la pièce en cours (vide = aucun)
     var onEvent: (Int) -> Unit = {}   // 0 = pose, n>0 = n lignes
 
-    val level get() = lines / 10 + 1
+    val level get() = (lines - levelBase) / 10 + 1
     val delayMs: Long
         get() {
             if (mode == Mode.PUZZLE) return 1200L
             val base = maxOf(80L, 800L - (level - 1) * 70L)
-            return if (mode == Mode.CHAOS && timeAcc < speedUntil) maxOf(60L, base / 3) else base
+            return if (mode == Mode.CHAOS && evSpeed) maxOf(60L, base / 3) else base
         }
 
     private var bag = mutableListOf<Int>()
     private var canHold = true
+    private var levelBase = 0   // lignes déjà faites au début du tableau en cours (mode DESSIN : le niveau repart de 1)
     private var lastFall = 0L
     private var lockAt = 0L
     private var lockResets = 0
@@ -119,11 +123,9 @@ class Game(private val prefs: SharedPreferences) {
     private var fxId = 0
     private var seq: List<Int> = emptyList()
     private var seqIdx = 0
-    private var bombNext = false
-    private var eventAt = 0L
-    private var speedUntil = 0L
-    private var reverseUntil = 0L
-    private var noRotUntil = 0L
+    private var evSpeed = false     // CHAOS : événement de la pièce en cours
+    private var evReverse = false
+    private var evNoRot = false
     private var botAt = 0L
     private var bot = Bot()
 
@@ -180,8 +182,8 @@ class Game(private val prefs: SharedPreferences) {
     fun start(m: Mode = mode, retry: Boolean = false) {
         mode = m; timeAcc = 0L; timeMs = 0L; loadBest(m)
         score = 0; lines = 0; hold = -1; banner = ""; fx = null; clearRows = emptyList()
-        canRetry = false; result = "GAME OVER"; chain = 0
-        bombNext = false; speedUntil = 0L; reverseUntil = 0L; noRotUntil = 0L
+        canRetry = false; result = "GAME OVER"; chain = 0; levelBase = 0
+        clearChaos()
         bag.clear()
         when (m) {
             Mode.PICTURE -> { picture = 1; board = pictureBoard(0) }
@@ -190,7 +192,7 @@ class Game(private val prefs: SharedPreferences) {
         }
         if (m == Mode.MISSIONS) { val a = newMission(emptyList()); missions = listOf(a, newMission(listOf(a.first))) }
         if (m == Mode.DUEL) { bot = Bot(); oppBoard = bot.board.copyOf(); botAt = 3000L }
-        eventAt = 10_000L; garbageAt = 15_000L
+        garbageAt = 15_000L
         next = draw(); state = GState.PLAYING
         lastTickAt = SystemClock.uptimeMillis()
         spawnNext()
@@ -213,13 +215,28 @@ class Game(private val prefs: SharedPreferences) {
         x in 0 until COLS && y < ROWS && (y < 0 || board[y * COLS + x] == 0)
     }
 
+    private fun clearChaos() { evSpeed = false; evReverse = false; evNoRot = false; chaosLabel = "" }
+
+    /** CHAOS : à chaque nouvelle pièce, un événement au hasard (ou aucun) qui dure jusqu'à sa pose. */
+    private fun rollChaos(t: Int) {
+        clearChaos()
+        if (t == 7) { chaosLabel = "BOMBE !"; return }
+        when ((0..9).random()) {
+            0, 1 -> { evSpeed = true; chaosLabel = "VITESSE ×3" }
+            2, 3 -> { evReverse = true; chaosLabel = "COMMANDES INVERSÉES" }
+            4, 5 -> { evNoRot = true; chaosLabel = "ROTATION BLOQUÉE" }
+            else -> {}
+        }
+    }
+
     private fun spawn(t: Int) {
         val p = Piece(t); piece = p; canHold = true; resetTimers()
+        if (mode == Mode.CHAOS) rollChaos(t)
         if (!fits(p)) gameOver()
     }
 
     private fun spawnNext() {
-        if (mode == Mode.CHAOS && bombNext) { bombNext = false; spawn(7); return }
+        if (mode == Mode.CHAOS && (0..9).random() < 2) { spawn(7); return }   // une bombe de temps en temps
         val t = next
         if (t < 0) {   // PUZZLE : plus de pièces et le dessin n'est pas effacé
             result = "ÉCHEC — NIVEAU " + picture; canRetry = true; state = GState.OVER; saveBest(); return
@@ -243,14 +260,14 @@ class Game(private val prefs: SharedPreferences) {
     fun move(dx0: Int) {
         val p = piece ?: return
         if (state != GState.PLAYING) return
-        val dx = if (mode == Mode.CHAOS && timeAcc < reverseUntil) -dx0 else dx0
+        val dx = if (mode == Mode.CHAOS && evReverse) -dx0 else dx0
         p.copy(x = p.x + dx).let { if (fits(it)) { piece = it; touched() } }
     }
 
     fun rotate() {
         val p = piece ?: return
         if (state != GState.PLAYING) return
-        if (mode == Mode.CHAOS && timeAcc < noRotUntil) return
+        if (mode == Mode.CHAOS && evNoRot) return
         if (!fits(p.copy(y = p.y + 1))) return   // la pièce touche : plus de rotation possible
         val r = (p.rot + 1) % 4
         for (k in intArrayOf(0, -1, 1, -2, 2)) {          // « wall kicks » simplifiés
@@ -274,7 +291,6 @@ class Game(private val prefs: SharedPreferences) {
                 addGarbage(1)
                 garbageAt = timeAcc + maxOf(6000L, 15000L - (timeAcc / 20000L) * 1000L)
             }
-            Mode.CHAOS -> if (timeAcc >= eventAt) chaosEvent()
             Mode.DUEL -> if (timeAcc >= botAt) botTurn()
             else -> {}
         }
@@ -323,6 +339,7 @@ class Game(private val prefs: SharedPreferences) {
 
     private fun lock() {
         val p = piece ?: return
+        clearChaos()
         if (p.type == 7) { explode(p); return }
         val b = board.copyOf()
         p.cells.forEach { (x, y) -> if (y >= 0) b[y * COLS + x] = p.type + 1 }
@@ -379,7 +396,7 @@ class Game(private val prefs: SharedPreferences) {
     private fun afterClear() {
         if (state != GState.PLAYING) return
         if (mode == Mode.PICTURE && board.none { it == 9 }) {
-            score += 1000; picture++; board = pictureBoard(picture - 1); say("TABLEAU SUIVANT !")
+            score += 1000; picture++; levelBase = lines; board = pictureBoard(picture - 1); say("TABLEAU SUIVANT !")
         }
         if (mode == Mode.PUZZLE && board.none { it == 9 }) {
             score += 500 + 100 * (seq.size - seqIdx + (if (next >= 0) 1 else 0))
@@ -441,16 +458,6 @@ class Game(private val prefs: SharedPreferences) {
             while (!fits(q) && tries <= rows) { q = q.copy(y = q.y - 1); tries++ }
             if (fits(q)) piece = q else gameOver()
         }
-    }
-
-    private fun chaosEvent() {
-        when ((0..3).random()) {
-            0 -> { speedUntil = timeAcc + 8000L; say("VITESSE ×3 !") }
-            1 -> { reverseUntil = timeAcc + 8000L; say("COMMANDES INVERSÉES !") }
-            2 -> { noRotUntil = timeAcc + 8000L; say("ROTATION BLOQUÉE !") }
-            else -> { bombNext = true; say("BOMBE EN APPROCHE !") }
-        }
-        eventAt = timeAcc + 10_000L + (0..5000).random()
     }
 
     private fun sendToBot(n: Int) {
