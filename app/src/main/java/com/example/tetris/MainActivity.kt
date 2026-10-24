@@ -143,7 +143,7 @@ fun TetrisApp() {
                     InfoPanel("SUIVANT", t, Modifier.fillMaxWidth()) { PieceCanvas(game.next, t, style) }
                     InfoPanel("NIV " + game.level + " · LIGNES", t, Modifier.fillMaxWidth(), t.accent) { Value(game.lines.toString(), t) }
                     when (game.mode) {
-                        Mode.PICTURE -> InfoPanel("TABLEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PICTURES.size, t) }
+                        Mode.PICTURE -> InfoPanel("TABLEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PICTURES.size, t, 13) }
                         Mode.PUZZLE -> {
                             InfoPanel("NIVEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PUZZLES.size, t) }
                             InfoPanel("PIÈCES", t, Modifier.fillMaxWidth()) { Value(game.piecesLeft.toString(), t) }
@@ -156,10 +156,24 @@ fun TetrisApp() {
                             }
                         }
                         Mode.DUEL -> InfoPanel("ADVERSAIRE", t, Modifier.fillMaxWidth()) { OpponentBoard(game.oppBoard, t) }
+                        Mode.CHAOS -> {}   // place pour le détail de l'événement
                         else -> InfoPanel("TEMPS", t, Modifier.fillMaxWidth()) { Value(fmtTime(game.timeMs), t) }
                     }
                     if (game.mode != Mode.PUZZLE && game.mode != Mode.DUEL) {
                         InfoPanel("RECORD", t, Modifier.fillMaxWidth()) { Value(game.best.toString(), t) }
+                    }
+                    if (game.mode == Mode.CHAOS) {
+                        InfoPanel("ÉVÉNEMENT", t, Modifier.fillMaxWidth()) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                val on = game.chaosLabel.isNotEmpty()
+                                Text(
+                                    if (on) game.chaosLabel else "Pas d'événement",
+                                    color = if (on) Color(0xFFFF6B5E) else t.text.copy(alpha = 0.6f),
+                                    fontSize = 11.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center, lineHeight = 13.sp,
+                                )
+                                if (on) Text(game.chaosDetail, color = t.text, fontSize = 10.sp, textAlign = TextAlign.Center, lineHeight = 13.sp)
+                            }
+                        }
                     }
                     Spacer(Modifier.weight(1f))
                     WoodPill("RÉSERVE", t, Modifier.fillMaxWidth().height(44.dp)) { game.holdPiece() }
@@ -285,8 +299,8 @@ fun InfoPanel(title: String, t: Theme, modifier: Modifier = Modifier, titleColor
 }
 
 @Composable
-fun Value(v: String, t: Theme) {
-    Text(v, color = t.text, fontSize = 17.sp, fontWeight = FontWeight.Black, maxLines = 1)
+fun Value(v: String, t: Theme, size: Int = 17) {
+    Text(v, color = t.text, fontSize = size.sp, fontWeight = FontWeight.Black, maxLines = 1)
 }
 
 val STYLES = listOf("Biseauté", "Arrondi", "Plat", "Contour", "Bulle")
@@ -434,14 +448,15 @@ fun BoardView(game: Game, t: Theme, style: Int) {
                 cellAt((i % COLS) * s, (i / COLS) * s, s, c, 1f, style)
             }
             for (i in b.indices) if (b[i] == 9) pictureCell((i % COLS) * s, (i / COLS) * s, s, pulse)
-            game.ghost()?.let { g ->
+            val pa = game.pieceAlpha()   // pièce fantôme : clignote puis disparaît (ombre de visée comprise)
+            if (pa > 0f) game.ghost()?.let { g ->
                 val gc = if (g.type == 7) Color(0xFFFF3B30) else t.pieces[g.type]
                 g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, gc, 0.25f, style) }
             }
-            game.piece?.let { p ->
+            if (pa > 0f) game.piece?.let { p ->
                 val pc = if (p.type == 7) Color(0xFFFF3B30) else t.pieces[p.type]
                 val st = if (p.type == 7) 4 else style
-                p.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, pc, 1f, st) }
+                p.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, pc, pa, st) }
             }
             val f = game.fx
             if (f != null && prog < 1f) clearEffect(f, prog, s, t)
