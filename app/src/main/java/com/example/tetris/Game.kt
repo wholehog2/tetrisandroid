@@ -190,6 +190,7 @@ class Game(private val prefs: SharedPreferences) {
     var missions by mutableStateOf<List<Pair<Int, Int>>>(emptyList())   // (lignes d'un coup, fois restantes)
     var oppBoard by mutableStateOf(IntArray(COLS * ROWS))
     var piecesLeft by mutableIntStateOf(0)
+    var picDone by mutableStateOf(loadDone())     // DESSIN : numéros (1..100) des tableaux validés
     var chaosLabel by mutableStateOf("")      // CHAOS : événement actif sur la pièce en cours (vide = aucun)
     var onEvent: (Int) -> Unit = {}   // 0 = pose, n>0 = n lignes
 
@@ -244,7 +245,7 @@ class Game(private val prefs: SharedPreferences) {
 
     /** Texte du record affiché sur l'écran de sélection. */
     fun recordLabel(m: Mode): String =
-        "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+        if (m == Mode.PICTURE) "Tableaux validés : " + picDone.size + "/" + PICTURES.size else "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
 
     /** Plateau de départ d'un tableau du mode DESSIN : les blocs du dessin portent la valeur 9. */
     private fun pictureBoard(index: Int): IntArray {
@@ -273,14 +274,14 @@ class Game(private val prefs: SharedPreferences) {
         return k to c
     }
 
-    fun start(m: Mode = mode, retry: Boolean = false) {
+    fun start(m: Mode = mode, retry: Boolean = false, level: Int = 1) {
         mode = m; timeAcc = 0L; timeMs = 0L; loadBest(m)
         score = 0; lines = 0; hold = -1; banner = ""; fx = null; clearRows = emptyList()
         canRetry = false; result = "GAME OVER"; chain = 0; levelBase = 0
         clearChaos()
         bag.clear()
         when (m) {
-            Mode.PICTURE -> { picture = 1; board = pictureBoard(0) }
+            Mode.PICTURE -> { picture = level.coerceIn(1, PICTURES.size); board = pictureBoard(picture - 1) }
             Mode.PUZZLE -> { if (!retry) picture = 1; loadPuzzle() }
             else -> { picture = 1; board = IntArray(COLS * ROWS) }
         }
@@ -293,6 +294,18 @@ class Game(private val prefs: SharedPreferences) {
     }
 
     fun toMenu() { state = GState.READY }
+
+    private fun loadDone(): Set<Int> =
+        (prefs.getString("pic_done", "") ?: "").split(",").mapNotNull { it.toIntOrNull() }.filter { it in 1..PICTURES.size }.toSet()
+
+    private fun markDone(n: Int) {
+        if (n in picDone) return
+        picDone = picDone + n
+        prefs.edit().putString("pic_done", picDone.sorted().joinToString(",")).apply()
+    }
+
+    /** Premier tableau non validé (ou le dernier si tout est validé). */
+    fun firstTodo(): Int = (1..PICTURES.size).firstOrNull { it !in picDone } ?: PICTURES.size
 
     fun pause() { if (state == GState.PLAYING) state = GState.PAUSED }
     fun resume() {
@@ -491,6 +504,7 @@ class Game(private val prefs: SharedPreferences) {
         if (state != GState.PLAYING) return
         if (mode == Mode.PICTURE && board.none { it == 9 }) {
             score += 1000
+            markDone(picture)
             if (picture >= PICTURES.size) { win("BRAVO ! LES " + PICTURES.size + " TABLEAUX"); return }
             picture++; levelBase = lines; board = pictureBoard(picture - 1); say("TABLEAU SUIVANT !")
         }

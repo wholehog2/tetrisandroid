@@ -10,6 +10,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -76,6 +79,7 @@ fun TetrisApp() {
     var lshift by remember { mutableFloatStateOf(prefs.getFloat("lshift", 0f)) } // décalage de la flèche gauche vers le bouton de rotation (dp)
     var showSettings by remember { mutableStateOf(false) }
     var inMenu by remember { mutableStateOf(true) }   // écran de sélection du mode
+    var picking by remember { mutableStateOf(false) } // écran de choix du tableau (mode DESSIN)
     val zoneH = maxOf(150f, 140f * arrow + 14f)
     val t = THEMES[themeIdx]
     val haptic = LocalHapticFeedback.current
@@ -92,12 +96,21 @@ fun TetrisApp() {
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { game.pause() }
     BackHandler(enabled = game.state == GState.PLAYING) { game.pause() }
     BackHandler(enabled = !inMenu && game.state != GState.PLAYING) { game.toMenu(); inMenu = true }
+    BackHandler(enabled = inMenu && picking) { picking = false }
     BackHandler(enabled = showSettings) { showSettings = false; if (game.state == GState.READY) inMenu = true }
 
     Box(Modifier.fillMaxSize()) {
         Backdrop(t)
         if (inMenu) {
-            ModeSelect(game, t, { m -> game.start(m); inMenu = false }, { showSettings = true; inMenu = false })
+            if (picking) {
+                TableauSelect(game, t, { n -> game.start(Mode.PICTURE, level = n); picking = false; inMenu = false }, { picking = false })
+            } else {
+                ModeSelect(
+                    game, t,
+                    { m -> if (m == Mode.PICTURE) picking = true else { game.start(m); inMenu = false } },
+                    { showSettings = true; inMenu = false },
+                )
+            }
         } else {
         Column(Modifier.fillMaxSize()) {
             // ---- zone de jeu : plateau à gauche, cadres à droite ----
@@ -200,13 +213,13 @@ fun TetrisApp() {
                         }
                         val btn = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board)
                         Button(
-                            onClick = { if (game.state == GState.PAUSED) game.resume() else game.start(retry = game.canRetry) },
+                            onClick = { if (game.state == GState.PAUSED) game.resume() else game.start(retry = game.canRetry, level = game.picture) },
                             colors = btn, modifier = Modifier.fillMaxWidth().height(52.dp),
                         ) {
                             Text(when (game.state) { GState.READY -> "JOUER"; GState.PAUSED -> "REPRENDRE"; else -> if (game.canRetry) "RÉESSAYER" else "REJOUER" }, fontWeight = FontWeight.Bold)
                         }
                         if (game.state == GState.PAUSED) {
-                            Button(onClick = { game.start() }, colors = btn, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("RECOMMENCER") }
+                            Button(onClick = { game.start(level = game.picture) }, colors = btn, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("RECOMMENCER") }
                         }
                         Button(
                             onClick = { game.toMenu(); inMenu = true },
@@ -779,5 +792,65 @@ fun ModeVisual(m: Mode, t: Theme, modifier: Modifier) {
                 drawPath(tri, t.accent)
             }
         }
+    }
+}
+
+// ---------- DESSIN : récapitulatif des tableaux ----------
+
+@Composable
+fun TableauSelect(game: Game, t: Theme, onPlay: (Int) -> Unit, onBack: () -> Unit) {
+    val todo = game.firstTodo()             // le jeu se place sur le premier tableau non validé
+    var sel by remember { mutableIntStateOf(todo) }
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(Unit) { gridState.scrollToItem(maxOf(0, (todo - 1) / 5 - 1) * 5) }
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("DESSIN · TABLEAUX", color = t.accent, fontSize = 26.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.CenterHorizontally))
+        Text(
+            game.picDone.size.toString() + " / " + PICTURES.size + " validés",
+            color = t.text.copy(alpha = 0.85f), fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(5), state = gridState, modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(PICTURES.size) { i ->
+                val n = i + 1
+                TableauTile(n, PICTURES[i], n in game.picDone, n == sel, n <= todo, t) { sel = n }
+            }
+        }
+        Button(
+            onClick = { onPlay(sel) }, modifier = Modifier.fillMaxWidth().height(52.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board),
+        ) { Text("JOUER LE TABLEAU " + sel, fontWeight = FontWeight.Bold) }
+        Button(
+            onClick = onBack, modifier = Modifier.fillMaxWidth().height(44.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+        ) { Text("RETOUR", fontWeight = FontWeight.Bold) }
+    }
+}
+
+/** Vignette d'un tableau : aperçu du dessin, numéro, ✓ vert si validé ; grisée tant qu'un tableau précédent n'est pas validé. */
+@Composable
+fun TableauTile(n: Int, pic: List<String>, done: Boolean, selected: Boolean, unlocked: Boolean, t: Theme, onClick: () -> Unit) {
+    val border = if (selected) t.accent else if (done) Color(0xFF4CD964) else t.plaque.copy(alpha = 0.6f)
+    Box(
+        Modifier.aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(t.plaque)
+            .border(if (selected) 3.dp else 1.5.dp, border, RoundedCornerShape(10.dp))
+            .clickable(enabled = unlocked) { onClick() },
+    ) {
+        Canvas(Modifier.fillMaxSize().padding(7.dp).graphicsLayer { alpha = if (unlocked) 1f else 0.3f }) {
+            val s = size.width / 10
+            val top = size.height - pic.size * s
+            pic.forEachIndexed { r, row ->
+                row.forEachIndexed { c, ch ->
+                    if (ch == '#') drawRect(Color(0xFFA8E4FF), Offset(c * s, top + r * s), Size(s * 0.92f, s * 0.92f))
+                }
+            }
+        }
+        Text(n.toString(), color = t.onPlaque, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.TopStart).padding(5.dp))
+        if (done) Text("✓", color = Color(0xFF4CD964), fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.TopEnd).padding(horizontal = 5.dp))
     }
 }
