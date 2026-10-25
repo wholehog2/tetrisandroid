@@ -121,6 +121,8 @@ fun TetrisApp() {
                     "DESSIN · TABLEAUX", PICTURES.size, game.picDone, game.picStars, game.firstTodo(), { PICTURES[it] }, t,
                     { n -> game.start(Mode.PICTURE, level = n); picking = null; inMenu = false }, { picking = null },
                 )
+            } else if (pk == Mode.PACKS) {
+                PackSelect(game, t, { i -> game.startPack(i); picking = null; inMenu = false }, { picking = null })
             } else if (pk == Mode.PUZZLE) {
                 LevelSelect(
                     "PUZZLE · NIVEAUX", PUZZLES.size, game.puzDone, game.puzStars, game.firstTodoPuz(), { PUZZLES[it].rows }, t,
@@ -129,7 +131,7 @@ fun TetrisApp() {
             } else {
                 ModeSelect(
                     game, t,
-                    { m -> if (m == Mode.PICTURE || m == Mode.PUZZLE) picking = m else { game.start(m); inMenu = false } },
+                    { m -> if (m == Mode.PICTURE || m == Mode.PUZZLE || m == Mode.PACKS) picking = m else { game.start(m); inMenu = false } },
                     { showSettings = true; inMenu = false },
                     { showStats = true },
                     if (game.hasSave()) ({ if (game.restoreGame()) inMenu = false }) else null,
@@ -514,17 +516,17 @@ fun BoardView(game: Game, t: Theme, style: Int) {
             for (j in 1 until ROWS) drawLine(t.grid, Offset(0f, j * s), Offset(size.width, j * s))
             val b = game.board
             for (i in b.indices) if (b[i] > 0 && b[i] != 9) {
-                val c = if (b[i] == 8) Color(0xFF8A8F98) else t.pieces[b[i] - 1]
+                val c = boardColor(t, b[i])
                 cellAt((i % COLS) * s, (i / COLS) * s, s, c, 1f, style)
             }
             for (i in b.indices) if (b[i] == 9) pictureCell((i % COLS) * s, (i / COLS) * s, s, pulse)
             val pa = game.pieceAlpha()   // pièce fantôme : clignote puis disparaît (ombre de visée comprise)
             if (pa > 0f) game.ghost()?.let { g ->
-                val gc = if (g.type == 7) Color(0xFFFF3B30) else t.pieces[g.type]
+                val gc = typeColor(t, g.type)
                 g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, gc, 0.25f, style) }
             }
             if (pa > 0f) game.piece?.let { p ->
-                val pc = if (p.type == 7) Color(0xFFFF3B30) else t.pieces[p.type]
+                val pc = typeColor(t, p.type)
                 val st = if (p.type == 7) 4 else style
                 p.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, pc, pa, st) }
             }
@@ -569,13 +571,13 @@ fun OpponentBoard(b: IntArray, t: Theme) {
 fun PieceCanvas(type: Int, t: Theme, style: Int) {
     Canvas(Modifier.fillMaxWidth().aspectRatio(1f)) {
         if (type < 0) return@Canvas
-        val cells = SHAPES[type][0]
-        val s = size.width / 4.5f
+        val cells = shapeRots(type)[0]
         val w = cells.maxOf { it.first } - cells.minOf { it.first } + 1
         val h = cells.maxOf { it.second } - cells.minOf { it.second } + 1
+        val s = size.width / maxOf(4.5f, maxOf(w, h) + 0.5f)   // les grandes pièces des packs rétrécissent pour tenir
         val ox = (size.width - w * s) / 2 - cells.minOf { it.first } * s
         val oy = (size.height - h * s) / 2 - cells.minOf { it.second } * s
-        cells.forEach { (x, y) -> cellAt(ox + x * s, oy + y * s, s, t.pieces[type], 1f, style) }
+        cells.forEach { (x, y) -> cellAt(ox + x * s, oy + y * s, s, typeColor(t, type), 1f, style) }
     }
 }
 
@@ -822,6 +824,69 @@ fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<F
     )
 }
 
+// ---------- écran de choix du pack de formes (mode FORMES) ----------
+
+@Composable
+fun PackSelect(game: Game, t: Theme, onPick: (Int) -> Unit, onBack: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("FORMES · CHOISISSEZ UN PACK", color = t.accent, fontSize = 20.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.CenterHorizontally))
+        Text("Chaque pack contient 8 pièces différentes", color = t.text.copy(alpha = 0.85f), fontSize = 13.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SHAPE_PACKS.forEachIndexed { i, p -> PackCard(i, p, game.packRecord(i), game.pack == i, t) { onPick(i) } }
+        }
+        Button(
+            onClick = onBack, modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board),
+        ) { Text("RETOUR", fontWeight = FontWeight.Bold) }
+    }
+}
+
+@Composable
+fun PackCard(index: Int, p: ShapePack, record: String, last: Boolean, t: Theme, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        Modifier.fillMaxWidth().clip(shape).background(t.plaque)
+            .then(if (last) Modifier.border(2.dp, t.accent, shape) else Modifier)
+            .clickable { onClick() }.padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text((index + 1).toString() + " · " + p.name, color = t.accent, fontSize = 17.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+            Text(record, color = t.onPlaque.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Text(p.desc, color = t.onPlaque, fontSize = 12.sp, lineHeight = 16.sp)
+        PackPreview(index, t)
+    }
+}
+
+/** Aperçu des 8 formes d'un pack, sur deux rangées de quatre, à la même échelle. */
+@Composable
+fun PackPreview(index: Int, t: Theme) {
+    Canvas(Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(12.dp)).background(t.board)) {
+        val shapes = (0 until PACK_SIZE).map { shapeRots(packType(index, it))[0] }
+        val ws = shapes.map { c -> c.maxOf { it.first } + 1 }
+        val hs = shapes.map { c -> c.maxOf { it.second } + 1 }
+        val gap = 0.8f   // écart entre deux formes, en cases
+        val rows = listOf(0..3, 4..7)
+        val rowW = rows.map { r -> r.sumOf { ws[it] } + gap * (r.count() - 1) }
+        val maxH = hs.maxOf { it }
+        val s = minOf(size.width * 0.94f / rowW.maxOf { it }, size.height * 0.9f / (2 * maxH + 0.8f), 22.dp.toPx())
+        val totalH = (2 * maxH + 0.8f) * s
+        rows.forEachIndexed { ri, r ->
+            var x0 = (size.width - rowW[ri] * s) / 2
+            val y0 = (size.height - totalH) / 2 + ri * (maxH + 0.8f) * s
+            r.forEach { i ->
+                val c = typeColor(t, packType(index, i))
+                shapes[i].forEach { (cx, cy) -> cellAt(x0 + cx * s, y0 + cy * s, s, c, 1f, 0) }
+                x0 += (ws[i] + gap) * s
+            }
+        }
+    }
+}
+
 // ---------- écran de sélection du mode ----------
 
 @Composable
@@ -883,6 +948,12 @@ fun ModeVisual(m: Mode, t: Theme, modifier: Modifier) {
                 cell(5, 5, p[4])
                 for (x in 0..2) cell(x, 4, p[(x + 3) % 7])
                 cell(2, 1, p[2]); cell(3, 1, p[2]); cell(4, 1, p[2]); cell(3, 2, p[2])
+            }
+            Mode.PACKS -> {
+                for (x in 0 until n) cell(x, 5, p[(x + 2) % 7])
+                cell(1, 2, p[2]); cell(0, 3, p[2]); cell(1, 3, p[2]); cell(2, 3, p[2]); cell(1, 4, p[2])   // une croix
+                cell(3, 4, p[5]); cell(4, 4, p[5]); cell(4, 3, p[5]); cell(5, 3, p[5]); cell(5, 2, p[5])   // un escalier
+                cell(3, 0, p[0]); cell(4, 0, p[0]); cell(5, 0, p[0])                                      // une barre
             }
             Mode.PICTURE -> {
                 val rows = listOf(".#..#.", "######", "######", ".####.", "..##..")   // un petit cœur

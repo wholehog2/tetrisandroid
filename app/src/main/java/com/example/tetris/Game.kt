@@ -17,6 +17,7 @@ enum class GState { READY, PLAYING, PAUSED, OVER }
 
 enum class Mode(val title: String, val desc: String) {
     CLASSIC("CLASSIQUE", "Le Tetris traditionnel : la vitesse augmente tous les 10 lignes. Tenez le plus longtemps possible !"),
+    PACKS("FORMES", "Le jeu classique, mais avec des pièces inédites ! Choisissez parmi 10 packs de 8 formes : minis, pentominos, géants, escaliers, barres…"),
     PICTURE("DESSIN", "Le plateau démarre avec des lignes incomplètes qui forment un dessin. Complétez-les pour effacer le tableau : 1000 niveaux de plus en plus difficiles !"),
     SURVIVAL("SURVIE", "Des lignes pirates remontent du bas de plus en plus vite. Effacez-les avant d'être submergé !"),
     MISSIONS("MISSIONS", "Remplissez des objectifs pendant la partie (ex. : 3 lignes d'un coup, 4 fois). Chaque mission validée rapporte un gros bonus."),
@@ -84,7 +85,7 @@ val SHAPES: List<List<List<Pair<Int, Int>>>> = listOf(
 }
 
 data class Piece(val type: Int, val rot: Int = 0, val x: Int = 3, val y: Int = 0) {
-    val cells get() = SHAPES[type][rot].map { (dx, dy) -> (x + dx) to (y + dy) }
+    val cells get() = shapeRots(type)[rot].map { (dx, dy) -> (x + dx) to (y + dy) }
 }
 
 /** Animation d'effacement en cours : lignes (positions avant effacement), nombre de lignes, enchaînement, durée en ms. */
@@ -120,6 +121,7 @@ class Game(private val prefs: SharedPreferences) {
     var puzDone by mutableStateOf(loadSet("puz_done", PUZZLES.size))   // PUZZLE : niveaux validés
     var puzStars by mutableStateOf(loadStars("puz_stars"))
     var chaosOn by mutableStateOf(loadChaos())                    // CHAOS : événements activés (0 à 5)
+    var pack by mutableIntStateOf(prefs.getInt("pack", 0).coerceIn(0, SHAPE_PACKS.lastIndex))   // FORMES : pack de formes choisi
     var duelLevel by mutableIntStateOf(prefs.getInt("duel_lvl", 1).coerceIn(0, 2))   // DUEL : 0 facile, 1 normal, 2 difficile
 
     val level get() = (lines - levelBase) / 10 + 1
@@ -167,17 +169,34 @@ class Game(private val prefs: SharedPreferences) {
 
     private fun draw(): Int {
         if (mode == Mode.PUZZLE) return if (seqIdx < seq.size) seq[seqIdx++] else -1
+        if (mode == Mode.PACKS) {   // sac de 8 : chaque forme du pack sort une fois avant de recommencer
+            if (bag.isEmpty()) bag = (0 until PACK_SIZE).map { packType(pack, it) }.shuffled().toMutableList()
+            return bag.removeAt(bag.lastIndex)
+        }
         if (bag.isEmpty()) bag = (0..6).shuffled().toMutableList()
         return bag.removeAt(bag.lastIndex)
     }
 
+    /** Clé du record : un record par pack de formes pour le mode FORMES. */
+    private fun bestKey(m: Mode) = if (m == Mode.PACKS) "best_PACKS_" + pack else "best_" + m.name
+
     private fun loadBest(m: Mode) {
-        best = prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+        best = prefs.getInt(bestKey(m), if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
     }
+
+    /** Choisit un pack de formes et lance une partie du mode FORMES. */
+    fun startPack(i: Int) {
+        pack = i.coerceIn(0, SHAPE_PACKS.lastIndex)
+        prefs.edit().putInt("pack", pack).apply()
+        start(Mode.PACKS)
+    }
+
+    /** Record d'un pack de formes. */
+    fun packRecord(i: Int): String = "Record : " + prefs.getInt("best_PACKS_" + i, 0)
 
     /** Texte du record affiché sur l'écran de sélection. */
     fun recordLabel(m: Mode): String =
-        if (m == Mode.PICTURE) "Tableaux validés : " + picDone.size + "/" + PICTURES.size else if (m == Mode.PUZZLE) "Niveaux validés : " + puzDone.size + "/" + PUZZLES.size else "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+        if (m == Mode.PICTURE) "Tableaux validés : " + picDone.size + "/" + PICTURES.size else if (m == Mode.PUZZLE) "Niveaux validés : " + puzDone.size + "/" + PUZZLES.size else if (m == Mode.PACKS) "Record : " + SHAPE_PACKS.indices.maxOf { prefs.getInt("best_PACKS_" + it, 0) } else "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
 
     /** Plateau de départ d'un tableau du mode DESSIN : les blocs du dessin portent la valeur 9. */
     private fun pictureBoard(index: Int): IntArray {
@@ -225,6 +244,7 @@ class Game(private val prefs: SharedPreferences) {
         next = draw(); state = GState.PLAYING
         lastTickAt = SystemClock.uptimeMillis()
         spawnNext()
+        if (m == Mode.PACKS) say("PACK " + SHAPE_PACKS[pack].name, 2200L)
     }
 
     fun toMenu() { state = GState.READY }
@@ -292,7 +312,8 @@ class Game(private val prefs: SharedPreferences) {
     /** Texte du bouton « reprendre » de l'écran de sélection. */
     fun saveLabel(): String = try {
         val o = JSONObject(prefs.getString("save", "") ?: "")
-        Mode.valueOf(o.getString("mode")).title + " · score " + o.getInt("score")
+        val m = Mode.valueOf(o.getString("mode"))
+        m.title + (if (m == Mode.PACKS) " " + SHAPE_PACKS[o.optInt("pack", 0).coerceIn(0, SHAPE_PACKS.lastIndex)].name else "") + " · score " + o.getInt("score")
     } catch (e: Exception) { "" }
 
     private fun ints(s: String): List<Int> = if (s.isEmpty()) emptyList() else s.split(",").map { it.trim().toInt() }
@@ -304,7 +325,7 @@ class Game(private val prefs: SharedPreferences) {
         flushStats()
         if (clearRows.isNotEmpty()) { finishClear(); if (state == GState.OVER) return }
         val o = JSONObject()
-        o.put("mode", mode.name)
+        o.put("mode", mode.name); o.put("pack", pack)
         o.put("board", board.joinToString(","))
         val p = piece
         o.put("piece", if (p == null) "" else listOf(p.type, p.rot, p.x, p.y).joinToString(","))
@@ -327,6 +348,7 @@ class Game(private val prefs: SharedPreferences) {
             val m = Mode.valueOf(o.getString("mode"))
             val b = ints(o.getString("board")).toIntArray()
             require(b.size == COLS * ROWS)
+            pack = o.optInt("pack", 0).coerceIn(0, SHAPE_PACKS.lastIndex)
             mode = m; loadBest(m); board = b
             val pv = ints(o.getString("piece"))
             piece = if (pv.size == 4) Piece(pv[0], pv[1], pv[2], pv[3]) else null
@@ -424,7 +446,7 @@ class Game(private val prefs: SharedPreferences) {
             val e = if (t == 7) 5 else if (ev != -2) ev else rollHoldEvent()
             type = applyEvent(e, t)
         }
-        val p = Piece(type); piece = p; canHold = true; resetTimers(); spawnedAt = timeAcc / 100 * 100
+        val p = Piece(type, 0, spawnX(type), 0); piece = p; canHold = true; resetTimers(); spawnedAt = timeAcc / 100 * 100
         if (!fits(p)) gameOver()
     }
 
@@ -451,7 +473,7 @@ class Game(private val prefs: SharedPreferences) {
     }
 
     private fun saveBest() {
-        if (score > best) { best = score; prefs.edit().putInt("best_" + mode.name, best).apply() }
+        if (score > best) { best = score; prefs.edit().putInt(bestKey(mode), best).apply() }
     }
 
     private fun gameOver() {
