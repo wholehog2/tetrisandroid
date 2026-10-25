@@ -778,7 +778,7 @@ fun SettingsPanel(t: Theme, ui: UiPrefs, game: Game, canPlace: Boolean, onEditBu
 
             Header("MODE DUEL : ORDINATEUR", t)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Facile", "Normal", "Difficile").forEachIndexed { i, name -> Chip(name, game.duelLevel == i, t) { game.setDuelLevel(i) } }
+                listOf("Facile", "Normal", "Difficile").forEachIndexed { i, name -> Chip(name, game.duelLevel == i, t) { game.changeDuelLevel(i) } }
             }
 
             Button(

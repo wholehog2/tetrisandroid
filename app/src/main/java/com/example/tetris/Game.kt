@@ -280,7 +280,7 @@ class Game(private val prefs: SharedPreferences) {
         prefs.edit().putString("chaos_on", chaosOn.sorted().joinToString(",")).apply()
     }
 
-    fun setDuelLevel(l: Int) { duelLevel = l; prefs.edit().putInt("duel_lvl", l).apply() }
+    fun changeDuelLevel(l: Int) { duelLevel = l; prefs.edit().putInt("duel_lvl", l).apply() }
 
     private fun botNoise(): Float = when (duelLevel) { 0 -> 4f; 2 -> 0.2f; else -> 1.2f }
 
