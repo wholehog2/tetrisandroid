@@ -2,6 +2,7 @@ package com.example.tetris
 
 import android.content.SharedPreferences
 import android.os.SystemClock
+import org.json.JSONObject
 import androidx.compose.runtime.*
 import kotlin.math.abs
 import kotlin.random.Random
@@ -19,7 +20,7 @@ enum class Mode(val title: String, val desc: String) {
     PICTURE("DESSIN", "Le plateau démarre avec des lignes incomplètes qui forment un dessin. Complétez-les pour effacer le tableau : 1000 niveaux de plus en plus difficiles !"),
     SURVIVAL("SURVIE", "Des lignes pirates remontent du bas de plus en plus vite. Effacez-les avant d'être submergé !"),
     MISSIONS("MISSIONS", "Remplissez des objectifs pendant la partie (ex. : 3 lignes d'un coup, 4 fois). Chaque mission validée rapporte un gros bonus."),
-    PUZZLE("PUZZLE", "Un plateau déjà rempli et une liste de pièces imposées : placez-les toutes pour tout effacer. 8 niveaux de plus en plus difficiles !"),
+    PUZZLE("PUZZLE", "Un plateau déjà rempli et une liste de pièces imposées : placez-les toutes pour tout effacer. 100 niveaux de plus en plus difficiles !"),
     CASCADE("CASCADE", "Après chaque ligne, les blocs retombent un par un et peuvent former de nouvelles lignes. Enchaînez les combos !"),
     DUEL("DUEL", "Affrontez l'ordinateur : vos lignes multiples lui envoient des lignes pirates, et inversement. Le premier débordé perd."),
     CHAOS("CHAOS", "Une pièce sur deux porte un événement : vitesse, commandes inversées, rotation bloquée, pièce fantôme, barre magique ou bombe. Gardez votre calme !"),
@@ -46,17 +47,25 @@ val PICTURES: List<List<String>> by lazy {
 /** Niveau du mode PUZZLE : plateau de départ (du haut vers le bas) et pièces imposées (0=I 1=O 2=T 3=S 4=Z 5=J 6=L). */
 class PuzzleLevel(val rows: List<String>, val seq: List<Int>)
 
-// Chaque niveau a été vérifié résoluble par un solveur.
-val PUZZLES = listOf(
-    PuzzleLevel(listOf("##....####"), listOf(0)),
-    PuzzleLevel(listOf("..##...###", "..####.###"), listOf(5, 1)),
-    PuzzleLevel(listOf("##..###...", "##..###...", "#######.#."), listOf(2, 5, 1)),
-    PuzzleLevel(listOf("#.....#..#", "#.....##.#", "####..##.#"), listOf(1, 1, 6, 6)),
-    PuzzleLevel(listOf("...#...#..", "..####.#..", "..########", ".#########"), listOf(0, 1, 5, 5)),
-    PuzzleLevel(listOf("#.........", "#...##....", "######..##", "######..##"), listOf(1, 1, 1, 1, 6)),
-    PuzzleLevel(listOf("........##", ".......###", "##.....###", "##....####"), listOf(1, 1, 1, 1, 1, 5)),
-    PuzzleLevel(listOf("....#....#", "....#.#..#", "...####.##", "...#######", "#..#######"), listOf(5, 1, 1, 1, 4, 6)),
-)
+/**
+ * 100 niveaux du mode PUZZLE, de plus en plus difficiles (de 1 à 11 pièces imposées). Chaque niveau a été vérifié résoluble par un solveur.
+ * Niveaux séparés par ';' ; format « lignes | pièces » : lignes en hexadécimal (10 bits, bit à 1 = bloc) séparées par ',' ;
+ * pièces = suite de chiffres (0=I 1=O 2=T 3=S 4=Z 5=J 6=L).
+ */
+private const val PUZ_DATA = "30f|0;0c7,0f7|51;338,338,3fa|251;019,1b9,1ff|512;00f,21f,39f|140;3c0,3e8,3fc|362;083,0d7,3f7|215;061,1e9,3ef|156;038,07d,37f|152;027,227,37f|412;380,38b,3bf|635;398,398,3fc|136;00f,18f,1bf|156;330,3b8,3bd|426;209,20d,3cd|1166;008,03d,0ff|6025;040,1c1,3fd|5611;013,013,27f|4511;240,2cc,2cf|1510;380,3b0,3f0|1160;081,1c1,1df|1615;200,294,3bf|1426;009,309,39f|6115;003,023,3f7|1421;210,232,3be|6511;044,0f4,0ff,1ff|0155;200,230,3f3,3f3|11116;209,2a9,2a9,3b9|11650;021,021,3e5,3fd|60111;001,0a7,0af,1ef|22605;078,07f,37f|16605;191,191,199,19f|50010;030,038,27e,27f|14116;031,031,33b,33b|56111;280,284,2ee,2ef|20666;060,068,26d,3ef|40425;311,311,331,3f1|10145;003,007,307,30f|111115;021,029,07b,07f,27f|511146;300,310,313,373,37f|511061;001,201,2f1,3f9,3fd|312615;310,310,333,333,33f|151536;010,098,09d,0ff,1ff|234552;309,309,389,389,3cf|113105;080,091,09f,19f,1ff|531121;381,381,3e1,3e1,3e1|511016;240,240,3cc,3dc,3df|061111;031,031,037,0b7,3bf|116551;003,24b,2cb,2cb,2cf|110050;040,040,243,3db,3df,3df|1310066;211,291,291,2f1,2f1,3f7|6064105;080,387,3c7,3f7,3f7|3611155;200,248,3ca,3ca,3cb,3fb|6105661;062,062,062,366,36f,37f|2011560;0e0,0e3,2f3,3f3,3fb|0631521;241,241,349,349,379,37f|0515116;201,311,311,311,37f,37f|1030002;100,104,115,17d,3fd,3fd|0500415;011,051,05b,05b,0ff,2ff|3406515;240,240,260,268,3fc,3fe|20360111;001,001,30d,31d,31f,39f|11035065;080,084,087,08f,0ff,0ff|01656616;008,00d,20f,20f,21f,33f|31260110;020,031,33f,33f,33f|15525636;202,2c2,3f2,3f2,3f6|10001565;001,301,301,31d,31f,33f|54450600;200,223,273,2fb,3fb|30012130;301,301,301,301,31f,37f|05116106;060,061,36b,36f,36f|10205551;210,210,212,217,21f,25f,3df|121051051;020,020,127,12f,32f,32f,32f|101154051;019,019,019,019,219,3fd,3fd|105641016;080,0cb,0cb,0db,1df,1ff|500501400;084,0c4,0c4,0e4,3e4,3e5,3fd|611001500;030,032,032,032,333,377,37f|045104160;201,281,281,381,3a5,3ad,3bf|000434156;200,301,305,305,305,3ef,3ef|065011560;008,109,119,119,399,39d,3df|060014200;208,208,228,22e,23e,33e,3bf|100325060;001,041,341,34b,34b,34b,3cb,3eb|0100231061;084,085,285,287,287,297,397,39f|6010500011;200,240,341,341,341,357,3f7,3f7|0101001250;012,352,352,356,356,376,37f|0000611220;081,085,385,385,385,385,3d5,3d7|0611001065;108,10e,30f,30f,32f,32f,33f|6101052020;00c,20c,20c,20c,24f,24f,27f,37f|0021210616;020,026,026,02f,03f,03f,23f,37f|2160064166;206,206,206,3c7,3c7,3cf,3ef|0206040065;280,280,290,290,2f2,2f3,2fb,2ff|0002110610;201,201,205,205,247,2c7,3c7,3df,3df|20001151501;100,100,308,3cf,3cf,3cf,3cf,3df|16412305615;001,001,201,213,393,393,3db,3df,3df|10010162211;204,20c,22c,22c,32c,32c,32f,3af,3af|00006050010;001,001,081,281,2b1,2f7,2f7,2ff,2ff|16050561151;020,020,0e0,0f8,2f8,2fc,2fc,2fc,3fe|20506100055;001,101,101,103,3c3,3d3,3f3,3f3,3f7|01020303512;210,212,292,292,292,292,2de,2ff,2ff|00002000216;221,229,229,229,229,269,369,379,37f|10104510510;014,094,094,0b4,0bc,2bc,2bc,3be,3fe|00610126501;006,206,24f,2ef,2ff,2ff,2ff|00012301065"
+
+val PUZZLES: List<PuzzleLevel> by lazy {
+    PUZ_DATA.split(";").map { lvl ->
+        val (rowsPart, seqPart) = lvl.split("|")
+        PuzzleLevel(
+            rowsPart.split(",").map { hex ->
+                val v = hex.toInt(16)
+                (9 downTo 0).joinToString("") { b -> if (((v shr b) and 1) == 1) "#" else "." }
+            },
+            seqPart.map { it - '0' },
+        )
+    }
+}
 
 /** Ordre des pièces : I, O, T, S, Z, J, L, puis la bombe du mode CHAOS (index 7) — 4 rotations pré-calculées. */
 val SHAPES: List<List<List<Pair<Int, Int>>>> = listOf(
@@ -106,6 +115,12 @@ class Game(private val prefs: SharedPreferences) {
     var chaosDetail by mutableStateOf("")     // CHAOS : explication de l'événement
     var chaosLabel by mutableStateOf("")      // CHAOS : événement actif sur la pièce en cours (vide = aucun)
     var onEvent: (Int) -> Unit = {}   // 0 = pose, n>0 = n lignes
+    var onSfx: (String) -> Unit = {}  // bruitages / vibrations : rot, lock, clear1..3, tetris, combo, bomb, over, win, mission, level, event
+    var picStars by mutableStateOf(loadStars("pic_stars"))        // DESSIN : étoiles (1 à 3) par tableau validé
+    var puzDone by mutableStateOf(loadSet("puz_done", PUZZLES.size))   // PUZZLE : niveaux validés
+    var puzStars by mutableStateOf(loadStars("puz_stars"))
+    var chaosOn by mutableStateOf(loadChaos())                    // CHAOS : événements activés (0 à 5)
+    var duelLevel by mutableIntStateOf(prefs.getInt("duel_lvl", 1).coerceIn(0, 2))   // DUEL : 0 facile, 1 normal, 2 difficile
 
     val level get() = (lines - levelBase) / 10 + 1
     val delayMs: Long
@@ -138,6 +153,8 @@ class Game(private val prefs: SharedPreferences) {
     private var spawnedAt = 0L
     private var botAt = 0L
     private var bot = Bot()
+    private var statBuf = 0L        // temps de jeu pas encore écrit dans les statistiques
+    private var levelStartAcc = 0L  // DESSIN / PUZZLE : début du niveau en cours (pour les étoiles)
 
     private fun resetTimers() { lastFall = SystemClock.uptimeMillis(); lockAt = 0L; lockResets = 0 }
 
@@ -160,7 +177,7 @@ class Game(private val prefs: SharedPreferences) {
 
     /** Texte du record affiché sur l'écran de sélection. */
     fun recordLabel(m: Mode): String =
-        if (m == Mode.PICTURE) "Tableaux validés : " + picDone.size + "/" + PICTURES.size else "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
+        if (m == Mode.PICTURE) "Tableaux validés : " + picDone.size + "/" + PICTURES.size else if (m == Mode.PUZZLE) "Niveaux validés : " + puzDone.size + "/" + PUZZLES.size else "Record : " + prefs.getInt("best_" + m.name, if (m == Mode.CLASSIC) prefs.getInt("best", 0) else 0)
 
     /** Plateau de départ d'un tableau du mode DESSIN : les blocs du dessin portent la valeur 9. */
     private fun pictureBoard(index: Int): IntArray {
@@ -190,18 +207,20 @@ class Game(private val prefs: SharedPreferences) {
     }
 
     fun start(m: Mode = mode, retry: Boolean = false, level: Int = 1) {
-        mode = m; timeAcc = 0L; timeMs = 0L; loadBest(m)
+        flushStats()
+        mode = m; timeAcc = 0L; timeMs = 0L; levelStartAcc = 0L; loadBest(m)
+        statAdd("games", 1); statAdd("games_" + m.name, 1)
         score = 0; lines = 0; hold = -1; banner = ""; fx = null; clearRows = emptyList()
         canRetry = false; result = "GAME OVER"; chain = 0; levelBase = 0
         clearChaos()
         bag.clear(); eventBag.clear()
         when (m) {
             Mode.PICTURE -> { picture = level.coerceIn(1, PICTURES.size); board = pictureBoard(picture - 1) }
-            Mode.PUZZLE -> { if (!retry) picture = 1; loadPuzzle() }
+            Mode.PUZZLE -> { picture = level.coerceIn(1, PUZZLES.size); loadPuzzle() }
             else -> { picture = 1; board = IntArray(COLS * ROWS) }
         }
         if (m == Mode.MISSIONS) { val a = newMission(emptyList()); missions = listOf(a, newMission(listOf(a.first))) }
-        if (m == Mode.DUEL) { bot = Bot(); oppBoard = bot.board.copyOf(); botAt = 3000L }
+        if (m == Mode.DUEL) { bot = Bot(botNoise()); oppBoard = bot.board.copyOf(); botAt = 3000L }
         garbageAt = 15_000L
         next = draw(); state = GState.PLAYING
         lastTickAt = SystemClock.uptimeMillis()
@@ -209,6 +228,132 @@ class Game(private val prefs: SharedPreferences) {
     }
 
     fun toMenu() { state = GState.READY }
+
+    // ---------- statistiques ----------
+
+    fun statGet(key: String): Long = prefs.getLong("st_" + key, 0L)
+    private fun statAdd(key: String, v: Long) { prefs.edit().putLong("st_" + key, statGet(key) + v).apply() }
+    private fun flushStats() { if (statBuf > 0L) { statAdd("time", statBuf); statBuf = 0L } }
+
+    // ---------- niveaux validés et étoiles ----------
+
+    private fun loadSet(key: String, max: Int): Set<Int> =
+        (prefs.getString(key, "") ?: "").split(",").mapNotNull { it.toIntOrNull() }.filter { it in 1..max }.toSet()
+
+    private fun loadStars(key: String): Map<Int, Int> =
+        (prefs.getString(key, "") ?: "").split(",").mapNotNull { e ->
+            val p = e.split(":")
+            val n = p.getOrNull(0)?.toIntOrNull()
+            val s = p.getOrNull(1)?.toIntOrNull()
+            if (n != null && s != null) n to s else null
+        }.toMap()
+
+    private fun starsFor(elapsedMs: Long, parMs: Long): Int = if (elapsedMs <= parMs) 3 else if (elapsedMs <= 2 * parMs) 2 else 1
+
+    private fun saveStars(pic: Boolean, n: Int, s: Int) {
+        val cur = if (pic) picStars else puzStars
+        if ((cur[n] ?: 0) >= s) return
+        val m = cur + (n to s)
+        if (pic) picStars = m else puzStars = m
+        prefs.edit().putString(if (pic) "pic_stars" else "puz_stars", m.entries.joinToString(",") { it.key.toString() + ":" + it.value }).apply()
+    }
+
+    private fun markPuzDone(n: Int) {
+        if (n in puzDone) return
+        puzDone = puzDone + n
+        prefs.edit().putString("puz_done", puzDone.sorted().joinToString(",")).apply()
+    }
+
+    /** Premier niveau du Puzzle non validé (ou le dernier si tout est validé). */
+    fun firstTodoPuz(): Int = (1..PUZZLES.size).firstOrNull { it !in puzDone } ?: PUZZLES.size
+
+    // ---------- réglages des modes ----------
+
+    private fun loadChaos(): Set<Int> {
+        val s = prefs.getString("chaos_on", null) ?: return (0..5).toSet()
+        return s.split(",").mapNotNull { it.toIntOrNull() }.filter { it in 0..5 }.toSet()
+    }
+
+    fun setChaosOn(id: Int, on: Boolean) {
+        chaosOn = if (on) chaosOn + id else chaosOn - id
+        eventBag.clear()
+        prefs.edit().putString("chaos_on", chaosOn.sorted().joinToString(",")).apply()
+    }
+
+    fun setDuelLevel(l: Int) { duelLevel = l; prefs.edit().putInt("duel_lvl", l).apply() }
+
+    private fun botNoise(): Float = when (duelLevel) { 0 -> 4f; 2 -> 0.2f; else -> 1.2f }
+
+    // ---------- sauvegarde de la partie en cours ----------
+
+    fun hasSave(): Boolean = prefs.getString("save", null) != null
+    fun clearSave() { prefs.edit().remove("save").apply() }
+
+    /** Texte du bouton « reprendre » de l'écran de sélection. */
+    fun saveLabel(): String = try {
+        val o = JSONObject(prefs.getString("save", "") ?: "")
+        Mode.valueOf(o.getString("mode")).title + " · score " + o.getInt("score")
+    } catch (e: Exception) { "" }
+
+    private fun ints(s: String): List<Int> = if (s.isEmpty()) emptyList() else s.split(",").map { it.trim().toInt() }
+
+    /** Enregistre la partie (appelée quand l'application passe en arrière-plan). */
+    fun saveGame() {
+        if (state == GState.OVER) { clearSave(); return }
+        if (state != GState.PAUSED && state != GState.PLAYING) return
+        flushStats()
+        if (clearRows.isNotEmpty()) { finishClear(); if (state == GState.OVER) return }
+        val o = JSONObject()
+        o.put("mode", mode.name)
+        o.put("board", board.joinToString(","))
+        val p = piece
+        o.put("piece", if (p == null) "" else listOf(p.type, p.rot, p.x, p.y).joinToString(","))
+        o.put("next", next); o.put("hold", hold); o.put("score", score); o.put("lines", lines)
+        o.put("picture", picture); o.put("timeAcc", timeAcc); o.put("levelBase", levelBase); o.put("levelStart", levelStartAcc)
+        o.put("canHold", canHold); o.put("bag", bag.joinToString(","))
+        o.put("garbageAt", garbageAt); o.put("botAt", botAt); o.put("spawnedAt", spawnedAt); o.put("seqIdx", seqIdx)
+        o.put("missions", missions.joinToString(";") { it.first.toString() + "," + it.second })
+        o.put("bot", bot.board.joinToString(",")); o.put("botDead", bot.dead); o.put("botBag", bot.bag.joinToString(","))
+        o.put("evSpeed", evSpeed); o.put("evReverse", evReverse); o.put("evNoRot", evNoRot); o.put("evGhost", evGhost)
+        o.put("chaosLabel", chaosLabel); o.put("chaosDetail", chaosDetail); o.put("eventBag", eventBag.joinToString(","))
+        prefs.edit().putString("save", o.toString()).apply()
+    }
+
+    /** Recharge la partie sauvegardée ; elle démarre en pause. Renvoie false si la sauvegarde est absente ou illisible. */
+    fun restoreGame(): Boolean {
+        val s = prefs.getString("save", null) ?: return false
+        return try {
+            val o = JSONObject(s)
+            val m = Mode.valueOf(o.getString("mode"))
+            val b = ints(o.getString("board")).toIntArray()
+            require(b.size == COLS * ROWS)
+            mode = m; loadBest(m); board = b
+            val pv = ints(o.getString("piece"))
+            piece = if (pv.size == 4) Piece(pv[0], pv[1], pv[2], pv[3]) else null
+            next = o.getInt("next"); hold = o.getInt("hold"); score = o.getInt("score"); lines = o.getInt("lines")
+            picture = o.getInt("picture"); timeAcc = o.getLong("timeAcc"); timeMs = timeAcc / 100 * 100
+            levelBase = o.getInt("levelBase"); levelStartAcc = o.getLong("levelStart")
+            canHold = o.getBoolean("canHold"); bag = ints(o.getString("bag")).toMutableList()
+            garbageAt = o.getLong("garbageAt"); botAt = o.getLong("botAt"); spawnedAt = o.getLong("spawnedAt")
+            seqIdx = o.getInt("seqIdx")
+            seq = if (m == Mode.PUZZLE) PUZZLES[(picture - 1).coerceIn(0, PUZZLES.size - 1)].seq else emptyList()
+            if (m == Mode.PUZZLE) piecesLeft = 1 + (if (next >= 0) 1 else 0) + (seq.size - seqIdx)
+            missions = o.getString("missions").split(";").filter { it.isNotEmpty() }.map { e -> val q = e.split(","); q[0].toInt() to q[1].toInt() }
+            if (m == Mode.DUEL) {
+                bot = Bot(botNoise())
+                bot.board = ints(o.getString("bot")).toIntArray(); bot.dead = o.getBoolean("botDead")
+                bot.bag = ints(o.getString("botBag")).toMutableList()
+                oppBoard = bot.board.copyOf()
+            }
+            evSpeed = o.getBoolean("evSpeed"); evReverse = o.getBoolean("evReverse")
+            evNoRot = o.getBoolean("evNoRot"); evGhost = o.getBoolean("evGhost")
+            chaosLabel = o.getString("chaosLabel"); chaosDetail = o.getString("chaosDetail")
+            eventBag = ints(o.getString("eventBag")).toMutableList()
+            banner = ""; fx = null; clearRows = emptyList(); canRetry = false; result = "GAME OVER"; chain = 0
+            state = GState.PAUSED
+            true
+        } catch (e: Exception) { false }
+    }
 
     private fun loadDone(): Set<Int> =
         (prefs.getString("pic_done", "") ?: "").split(",").mapNotNull { it.toIntOrNull() }.filter { it in 1..PICTURES.size }.toSet()
@@ -222,7 +367,7 @@ class Game(private val prefs: SharedPreferences) {
     /** Premier tableau non validé (ou le dernier si tout est validé). */
     fun firstTodo(): Int = (1..PICTURES.size).firstOrNull { it !in picDone } ?: PICTURES.size
 
-    fun pause() { if (state == GState.PLAYING) state = GState.PAUSED }
+    fun pause() { if (state == GState.PLAYING) { state = GState.PAUSED; flushStats() } }
     fun resume() {
         if (state != GState.PAUSED) return
         state = GState.PLAYING
@@ -246,12 +391,16 @@ class Game(private val prefs: SharedPreferences) {
      * -1 = pièce normale ; 0..5 = événement spécial. Garantit 50 % / 50 % et au moins un de chaque événement toutes les 12 pièces.
      */
     private fun rollEvent(): Int {
-        if (eventBag.isEmpty()) eventBag = mutableListOf(-1, -1, -1, -1, -1, -1, 0, 1, 2, 3, 4, 5).apply { shuffle() }
+        if (chaosOn.isEmpty()) return -1
+        if (eventBag.isEmpty()) eventBag = (List(chaosOn.size) { -1 } + chaosOn.toList()).toMutableList().apply { shuffle() }
         return eventBag.removeAt(eventBag.lastIndex)
     }
 
-    /** Pièce revenue de la réserve : 1 chance sur 2 d'avoir un événement, sans bombe. */
-    private fun rollHoldEvent(): Int = if ((0..1).random() == 0) -1 else (0..4).random()
+    /** Pièce revenue de la réserve : 1 chance sur 2 d'avoir un événement activé, sans bombe. */
+    private fun rollHoldEvent(): Int {
+        val c = chaosOn.filter { it != 5 }
+        return if (c.isEmpty() || (0..1).random() == 0) -1 else c.random()
+    }
 
     /** Applique l'événement e (0 vitesse, 1 inversé, 2 rotation bloquée, 3 fantôme, 4 barre magique, 5 bombe) ; renvoie le type de pièce lancé. */
     private fun applyEvent(e: Int, t: Int): Int {
@@ -265,6 +414,7 @@ class Game(private val prefs: SharedPreferences) {
             4 -> { type = 0; chaosLabel = "BARRE MAGIQUE"; chaosDetail = "Cette pièce devient une barre : parfaite pour un Tétris !" }
             5 -> { chaosLabel = "BOMBE !"; chaosDetail = "Détruit les blocs autour de son point de chute (zone 3×3)." }
         }
+        if (e >= 0) onSfx("event")
         return type
     }
 
@@ -293,7 +443,7 @@ class Game(private val prefs: SharedPreferences) {
         }
         val t = next
         if (t < 0) {   // PUZZLE : plus de pièces et le dessin n'est pas effacé
-            result = "ÉCHEC — NIVEAU " + picture; canRetry = true; state = GState.OVER; saveBest(); return
+            result = "ÉCHEC — NIVEAU " + picture; canRetry = true; state = GState.OVER; saveBest(); flushStats(); clearSave(); onSfx("over"); return
         }
         next = draw()
         if (mode == Mode.PUZZLE) piecesLeft = 1 + (if (next >= 0) 1 else 0) + (seq.size - seqIdx)
@@ -305,11 +455,19 @@ class Game(private val prefs: SharedPreferences) {
     }
 
     private fun gameOver() {
+        if (state == GState.OVER) return
         result = if (mode == Mode.DUEL) "DÉFAITE" else "GAME OVER"
-        state = GState.OVER; saveBest()
+        state = GState.OVER; saveBest(); flushStats(); clearSave()
+        if (mode == Mode.DUEL) statAdd("duel_loss", 1)
+        onSfx("over")
     }
 
-    private fun win(msg: String) { result = msg; state = GState.OVER; saveBest() }
+    private fun win(msg: String) {
+        if (state == GState.OVER) return
+        result = msg; state = GState.OVER; saveBest(); flushStats(); clearSave()
+        if (mode == Mode.DUEL) statAdd("duel_win", 1)
+        onSfx("win")
+    }
 
     fun move(dx0: Int) {
         val p = piece ?: return
@@ -326,16 +484,18 @@ class Game(private val prefs: SharedPreferences) {
         val r = (p.rot + 1) % 4
         for (k in intArrayOf(0, -1, 1, -2, 2)) {          // « wall kicks » simplifiés
             val q = p.copy(rot = r, x = p.x + k)
-            if (fits(q)) { piece = q; touched(); return }
+            if (fits(q)) { piece = q; touched(); onSfx("rot"); return }
             val up = q.copy(y = q.y - 1)
-            if (fits(up)) { piece = up; touched(); return }
+            if (fits(up)) { piece = up; touched(); onSfx("rot"); return }
         }
     }
 
     /** Appelée très souvent : temps, événements du mode, animation d'effacement, gravité et verrouillage. */
     fun tick(now: Long) {
         if (state != GState.PLAYING) return
-        timeAcc += now - lastTickAt; lastTickAt = now
+        val dt = now - lastTickAt
+        timeAcc += dt; statBuf += dt; lastTickAt = now
+        if (statBuf >= 5000L) flushStats()
         val shown = timeAcc / 100 * 100
         if (shown != timeMs) timeMs = shown
         if (banner.isNotEmpty() && timeAcc >= bannerUntil) banner = ""
@@ -398,7 +558,7 @@ class Game(private val prefs: SharedPreferences) {
         val b = board.copyOf()
         p.cells.forEach { (x, y) -> if (y >= 0) b[y * COLS + x] = p.type + 1 }
         board = b; piece = null; chain = 0
-        if (!detectClear()) { onEvent(0); afterClear() }
+        if (!detectClear()) { onEvent(0); onSfx("lock"); afterClear() }
     }
 
     /** Marque les lignes pleines (elles restent visibles pendant l'animation) ; renvoie false s'il n'y en a pas. */
@@ -411,6 +571,8 @@ class Game(private val prefs: SharedPreferences) {
         score += intArrayOf(0, 100, 300, 500, 800)[minOf(n, 4)] * lv * chain
         lines += n
         if (chain > 1) say("COMBO ×" + chain)
+        onSfx(if (n >= 4) "tetris" else if (chain > 1) "combo" else "clear" + n)
+        statAdd("lines", n.toLong()); if (n >= 4) statAdd("tetris", 1)
         if (mode == Mode.MISSIONS) missionProgress(n)
         if (mode == Mode.DUEL) sendToBot(n)
         val dur = when (n) { 1 -> 280; 2 -> 420; 3 -> 560; else -> 1100 }
@@ -452,14 +614,22 @@ class Game(private val prefs: SharedPreferences) {
         if (mode == Mode.PICTURE && board.none { it == 9 }) {
             score += 1000
             markDone(picture)
+            val st = starsFor(timeAcc - levelStartAcc, 9000L * PICTURES[picture - 1].size)
+            saveStars(true, picture, st)
             if (picture >= PICTURES.size) { win("BRAVO ! LES " + PICTURES.size + " TABLEAUX"); return }
-            picture++; levelBase = lines; board = pictureBoard(picture - 1); say("TABLEAU SUIVANT !")
+            onSfx("level")
+            picture++; levelBase = lines; levelStartAcc = timeAcc; board = pictureBoard(picture - 1)
+            say("TABLEAU RÉUSSI " + "★".repeat(st), 2200L)
         }
         if (mode == Mode.PUZZLE && board.none { it == 9 }) {
             score += 500 + 100 * (seq.size - seqIdx + (if (next >= 0) 1 else 0))
+            markPuzDone(picture)
+            val st = starsFor(timeAcc - levelStartAcc, 10000L * PUZZLES[picture - 1].seq.size)
+            saveStars(false, picture, st)
             picture++
             if (picture > PUZZLES.size) { win("BRAVO ! TOUS LES NIVEAUX"); return }
-            say("NIVEAU RÉUSSI !"); loadPuzzle(); next = draw()
+            onSfx("level")
+            say("NIVEAU RÉUSSI " + "★".repeat(st), 2200L); levelStartAcc = timeAcc; loadPuzzle(); next = draw()
         }
         saveBest()
         spawnNext()
@@ -477,6 +647,7 @@ class Game(private val prefs: SharedPreferences) {
         board = b; piece = null; chain = 0
         score += 20 * cnt
         say("BOUM !", 1000)
+        onSfx("bomb")
         onEvent(3)
         if (!detectClear()) afterClear()
     }
@@ -491,6 +662,7 @@ class Game(private val prefs: SharedPreferences) {
                 val k = updated[i].first
                 score += 500 * k
                 say("MISSION ACCOMPLIE ! +" + 500 * k)
+                onSfx("mission")
                 updated[i] = newMission(listOf(updated[1 - i].first))
             }
         }
@@ -527,7 +699,8 @@ class Game(private val prefs: SharedPreferences) {
 
     private fun botTurn() {
         val c = bot.play()
-        botAt = timeAcc + maxOf(500L, 1400L - (timeAcc / 15000L) * 100L)
+        val (slow, fast) = when (duelLevel) { 0 -> 2400L to 1300L; 2 -> 1000L to 350L; else -> 1400L to 500L }
+        botAt = timeAcc + maxOf(fast, slow - (timeAcc / 15000L) * 100L)
         oppBoard = bot.board.copyOf()
         if (bot.dead) { score += 2000; win("VICTOIRE !"); return }
         val g = garbageFor(c)
@@ -536,10 +709,10 @@ class Game(private val prefs: SharedPreferences) {
 }
 
 /** Adversaire du mode DUEL : place chaque pièce avec une heuristique simple (hauteur, trous, irrégularité, lignes). */
-class Bot {
+class Bot(private val noise: Float = 1.2f) {
     var board = IntArray(COLS * ROWS)
     var dead = false
-    private var bag = mutableListOf<Int>()
+    var bag = mutableListOf<Int>()
 
     private fun ok(cells: List<Pair<Int, Int>>) = cells.all { (x, y) ->
         x in 0 until COLS && y < ROWS && (y < 0 || board[y * COLS + x] == 0)
@@ -573,7 +746,7 @@ class Bot {
             var p = Piece(type, rot, x, 0)
             if (!ok(p.cells)) continue
             while (ok(p.copy(y = p.y + 1).cells)) p = p.copy(y = p.y + 1)
-            val sc = evaluate(p) + Random.nextFloat() * 1.2f
+            val sc = evaluate(p) + Random.nextFloat() * noise
             if (sc > bestScore) { bestScore = sc; best = p }
         }
         val p = best ?: run { dead = true; return 0 }

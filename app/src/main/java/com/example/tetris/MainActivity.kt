@@ -1,6 +1,8 @@
 package com.example.tetris
 
+import android.app.Activity
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
@@ -8,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -70,22 +73,28 @@ fun TetrisApp() {
     val ctx = LocalContext.current
     val prefs = remember { ctx.getSharedPreferences("tetris", Context.MODE_PRIVATE) }
     val game = remember { Game(prefs) }
-    var themeIdx by remember { mutableIntStateOf(prefs.getInt("theme", 0).coerceIn(0, THEMES.lastIndex)) }
-    var mirror by remember { mutableStateOf(prefs.getBoolean("mirror", false)) } // true = rotation à gauche, flèches à droite
-    var lift by remember { mutableFloatStateOf(prefs.getFloat("lift", 60f)) } // décalage des boutons depuis le bas (dp)
-    var style by remember { mutableIntStateOf(prefs.getInt("style", 0).coerceIn(0, STYLES.lastIndex)) }
-    var arrow by remember { mutableFloatStateOf(prefs.getFloat("arrow", 1f)) }   // taille des flèches (x1)
-    var rshift by remember { mutableFloatStateOf(prefs.getFloat("rshift", 0f)) } // décalage de la flèche droite (dp)
-    var lshift by remember { mutableFloatStateOf(prefs.getFloat("lshift", 0f)) } // décalage de la flèche gauche vers le bouton de rotation (dp)
+    val ui = remember { UiPrefs(prefs) }
+    val audio = remember { Audio(ctx) }
     var showSettings by remember { mutableStateOf(false) }
-    var inMenu by remember { mutableStateOf(true) }   // écran de sélection du mode
-    var picking by remember { mutableStateOf(false) } // écran de choix du tableau (mode DESSIN)
-    val zoneH = maxOf(150f, 140f * arrow + 14f)
-    val t = THEMES[themeIdx]
-    val haptic = LocalHapticFeedback.current
+    var showStats by remember { mutableStateOf(false) }
+    var inMenu by remember { mutableStateOf(true) }            // écran de sélection du mode
+    var picking by remember { mutableStateOf<Mode?>(null) }     // écran de choix du niveau (DESSIN / PUZZLE)
+    var editing by remember { mutableStateOf(false) }           // placement libre des boutons
+    val t = THEMES[ui.themeIdx]
+    val conf = LocalConfiguration.current
+    val wide = conf.screenWidthDp > conf.screenHeightDp         // paysage, tablette, pliable déplié
+    val zoneH = maxOf(150f, 140f * ui.arrow + 14f)
 
-    LaunchedEffect(Unit) {
-        game.onEvent = { n -> haptic.performHapticFeedback(if (n > 0) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove) }
+    LaunchedEffect(Unit) { game.onSfx = { n -> audio.play(n); audio.haptic(n) } }
+    LaunchedEffect(ui.musicVol, ui.sfxVol, ui.vib) {
+        audio.sfxVol = ui.sfxVol; audio.vibrate = ui.vib; audio.setMusicVolume(ui.musicVol)
+    }
+    LaunchedEffect(inMenu, game.state) {
+        if (!inMenu && game.state == GState.PLAYING) audio.startMusic() else audio.stopMusic()
+    }
+    LaunchedEffect(ui.autoRotate) {
+        (ctx as? Activity)?.requestedOrientation =
+            if (ui.autoRotate) ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
     }
     LaunchedEffect(game.state) {
         while (game.state == GState.PLAYING) {
@@ -93,31 +102,153 @@ fun TetrisApp() {
             game.tick(SystemClock.uptimeMillis())
         }
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { game.pause() }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { game.pause(); game.saveGame(); audio.stopMusic() }
     BackHandler(enabled = game.state == GState.PLAYING) { game.pause() }
     BackHandler(enabled = !inMenu && game.state != GState.PLAYING) { game.toMenu(); inMenu = true }
-    BackHandler(enabled = inMenu && picking) { picking = false }
+    BackHandler(enabled = inMenu && picking != null) { picking = null }
+    BackHandler(enabled = inMenu && showStats) { showStats = false }
     BackHandler(enabled = showSettings) { showSettings = false; if (game.state == GState.READY) inMenu = true }
+    BackHandler(enabled = editing) { editing = false; showSettings = true }
 
     Box(Modifier.fillMaxSize()) {
         Backdrop(t)
         if (inMenu) {
-            if (picking) {
-                TableauSelect(game, t, { n -> game.start(Mode.PICTURE, level = n); picking = false; inMenu = false }, { picking = false })
+            val pk = picking
+            if (showStats) {
+                StatsScreen(game, t) { showStats = false }
+            } else if (pk == Mode.PICTURE) {
+                LevelSelect(
+                    "DESSIN · TABLEAUX", PICTURES.size, game.picDone, game.picStars, game.firstTodo(), { PICTURES[it] }, t,
+                    { n -> game.start(Mode.PICTURE, level = n); picking = null; inMenu = false }, { picking = null },
+                )
+            } else if (pk == Mode.PUZZLE) {
+                LevelSelect(
+                    "PUZZLE · NIVEAUX", PUZZLES.size, game.puzDone, game.puzStars, game.firstTodoPuz(), { PUZZLES[it].rows }, t,
+                    { n -> game.start(Mode.PUZZLE, level = n); picking = null; inMenu = false }, { picking = null },
+                )
             } else {
                 ModeSelect(
                     game, t,
-                    { m -> if (m == Mode.PICTURE) picking = true else { game.start(m); inMenu = false } },
+                    { m -> if (m == Mode.PICTURE || m == Mode.PUZZLE) picking = m else { game.start(m); inMenu = false } },
                     { showSettings = true; inMenu = false },
+                    { showStats = true },
+                    if (game.hasSave()) ({ if (game.restoreGame()) inMenu = false }) else null,
                 )
             }
         } else {
-        Column(Modifier.fillMaxSize()) {
-            // ---- zone de jeu : plateau à gauche, cadres à droite ----
-            Row(
-                Modifier.weight(1f).fillMaxWidth().statusBarsPadding().padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            if (wide) {
+                Row(
+                    Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.BottomCenter) {
+                        if (!ui.mirror) WideMove(game, t, ui.arrow) else WoodButton(Kind.ROTATE, t, Modifier.size(116.dp)) { game.rotate() }
+                    }
+                    GameArea(game, t, ui.style, Modifier.weight(2.4f).fillMaxHeight())
+                    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.BottomCenter) {
+                        if (!ui.mirror) WoodButton(Kind.ROTATE, t, Modifier.size(116.dp)) { game.rotate() } else WideMove(game, t, ui.arrow)
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    GameArea(game, t, ui.style, Modifier.weight(1f).fillMaxWidth().statusBarsPadding().padding(8.dp))
+                    // ---- zone des pouces ----
+                    Box(
+                        Modifier.fillMaxWidth()
+                            .background(if (t.wood) Color(0xFFDDBB8E) else Color.Black.copy(alpha = 0.22f))
+                            .navigationBarsPadding().height(zoneH.dp + ui.lift.dp),
+                    ) {
+                        ControlsLayer(
+                            game, t, ui, editing,
+                            Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp + ui.lift.dp),
+                        )
+                    }
+                }
+            }
+
+            if (editing) {
+                Column(
+                    Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp).clip(RoundedCornerShape(18.dp))
+                        .background(Color.Black.copy(alpha = 0.78f)).padding(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Faites glisser chaque bouton à l'endroit voulu", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { editing = false; showSettings = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board),
+                        ) { Text("OK", fontWeight = FontWeight.Bold) }
+                        Button(
+                            onClick = { ui.custom = emptyMap(); ui.commit() },
+                            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                        ) { Text("RÉINITIALISER", fontWeight = FontWeight.Bold) }
+                    }
+                }
+            }
+
+            if (game.state != GState.PLAYING && !editing) {
+                if (showSettings) {
+                    SettingsPanel(
+                        t, ui, game, !wide,
+                        { editing = true; showSettings = false },
+                        { showSettings = false; if (game.state == GState.READY) inMenu = true },
+                    )
+                } else if (game.state != GState.READY) {
+                    Box(
+                        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)).pointerInput(Unit) { detectTapGestures { } },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            Modifier.padding(24.dp).clip(RoundedCornerShape(28.dp)).background(t.board).padding(24.dp).verticalScroll(rememberScrollState()),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            Text(
+                                if (game.state == GState.PAUSED) "PAUSE" else game.result,
+                                color = t.accent, fontSize = 34.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
+                            )
+                            Text(game.mode.title, color = t.text.copy(alpha = 0.8f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            if (game.state == GState.OVER) {
+                                Text(
+                                    "Score : " + game.score + (if (game.mode == Mode.PICTURE || game.mode == Mode.PUZZLE) "\nNiveau : " + game.picture else "") + "\n" + game.recordLabel(game.mode),
+                                    color = t.text, textAlign = TextAlign.Center, fontSize = 18.sp,
+                                )
+                            }
+                            val btn = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board)
+                            Button(
+                                onClick = { if (game.state == GState.PAUSED) game.resume() else game.start(retry = game.canRetry, level = game.picture) },
+                                colors = btn, modifier = Modifier.fillMaxWidth().height(52.dp),
+                            ) {
+                                Text(when (game.state) { GState.READY -> "JOUER"; GState.PAUSED -> "REPRENDRE"; else -> if (game.canRetry) "RÉESSAYER" else "REJOUER" }, fontWeight = FontWeight.Bold)
+                            }
+                            if (game.state == GState.PAUSED) {
+                                Button(onClick = { game.start(level = game.picture) }, colors = btn, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("RECOMMENCER") }
+                            }
+                            Button(
+                                onClick = { game.toMenu(); inMenu = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                            ) { Text("CHANGER DE MODE", fontWeight = FontWeight.Bold) }
+                            Button(
+                                onClick = { showSettings = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                            ) { Text("RÉGLAGES", fontWeight = FontWeight.Bold) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Plateau et cadres d'information (même présentation en portrait et en paysage). */
+@Composable
+fun GameArea(game: Game, t: Theme, style: Int, modifier: Modifier) {
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
                 Column(Modifier.weight(2.3f).fillMaxHeight()) {
                     ScoreBar(game.score, t)
                     if (game.mode == Mode.CHAOS) {   // hauteur fixe : le plateau ne bouge pas quand l'événement change
@@ -145,7 +276,7 @@ fun TetrisApp() {
                     when (game.mode) {
                         Mode.PICTURE -> InfoPanel("TABLEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PICTURES.size, t, 13) }
                         Mode.PUZZLE -> {
-                            InfoPanel("NIVEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PUZZLES.size, t) }
+                            InfoPanel("NIVEAU", t, Modifier.fillMaxWidth()) { Value(game.picture.toString() + "/" + PUZZLES.size, t, 14) }
                             InfoPanel("PIÈCES", t, Modifier.fillMaxWidth()) { Value(game.piecesLeft.toString(), t) }
                         }
                         Mode.MISSIONS -> InfoPanel("MISSIONS", t, Modifier.fillMaxWidth()) {
@@ -179,77 +310,16 @@ fun TetrisApp() {
                     WoodPill("RÉSERVE", t, Modifier.fillMaxWidth().height(44.dp)) { game.holdPiece() }
                 }
             }
-            // ---- zone des pouces ----
-            Box(
-                Modifier.fillMaxWidth()
-                    .background(if (t.wood) Color(0xFFDDBB8E) else Color.Black.copy(alpha = 0.22f))
-                    .navigationBarsPadding().height(zoneH.dp + lift.dp),
-            ) {
-                BoxWithConstraints(Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp + lift.dp)) {
-                    RotateButton(game, t, Modifier.align(if (mirror) Alignment.CenterStart else Alignment.CenterEnd))
-                    MoveCluster(game, t, arrow, rshift, lshift, mirror, maxWidth.value, Modifier.align(Alignment.CenterStart))
-                }
-            }
-        }
+}
 
-        if (game.state != GState.PLAYING) {
-            if (showSettings) {
-                SettingsPanel(
-                    t, lift, { lift = it }, { prefs.edit().putFloat("lift", lift).apply() },
-                    mirror, { mirror = it; prefs.edit().putBoolean("mirror", it).apply() },
-                    themeIdx, { themeIdx = it; prefs.edit().putInt("theme", it).apply() },
-                    style, { style = it; prefs.edit().putInt("style", it).apply() },
-                    arrow, { arrow = it }, { prefs.edit().putFloat("arrow", arrow).apply() },
-                    rshift, { rshift = it }, { prefs.edit().putFloat("rshift", rshift).apply() },
-                    lshift, { lshift = it }, { prefs.edit().putFloat("lshift", lshift).apply() },
-                    { showSettings = false; if (game.state == GState.READY) inMenu = true },
-                )
-            } else if (game.state != GState.READY) {
-                Box(
-                    Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)).pointerInput(Unit) { detectTapGestures { } },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        Modifier.padding(24.dp).clip(RoundedCornerShape(28.dp)).background(t.board).padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        Text(
-                            if (game.state == GState.PAUSED) "PAUSE" else game.result,
-                            color = t.accent, fontSize = 34.sp, fontWeight = FontWeight.Black,
-                        )
-                        Text(game.mode.title, color = t.text.copy(alpha = 0.8f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        if (game.state == GState.OVER) {
-                            Text(
-                                "Score : " + game.score + (if (game.mode == Mode.PICTURE || game.mode == Mode.PUZZLE) "\nNiveau : " + game.picture else "") + "\n" + game.recordLabel(game.mode),
-                                color = t.text, textAlign = TextAlign.Center, fontSize = 18.sp,
-                            )
-                        }
-                        val btn = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board)
-                        Button(
-                            onClick = { if (game.state == GState.PAUSED) game.resume() else game.start(retry = game.canRetry, level = game.picture) },
-                            colors = btn, modifier = Modifier.fillMaxWidth().height(52.dp),
-                        ) {
-                            Text(when (game.state) { GState.READY -> "JOUER"; GState.PAUSED -> "REPRENDRE"; else -> if (game.canRetry) "RÉESSAYER" else "REJOUER" }, fontWeight = FontWeight.Bold)
-                        }
-                        if (game.state == GState.PAUSED) {
-                            Button(onClick = { game.start(level = game.picture) }, colors = btn, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("RECOMMENCER") }
-                        }
-                        Button(
-                            onClick = { game.toMenu(); inMenu = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                        ) { Text("CHANGER DE MODE", fontWeight = FontWeight.Bold) }
-                        Button(
-                            onClick = { showSettings = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                        ) { Text("RÉGLAGES", fontWeight = FontWeight.Bold) }
-                    }
-                }
-            }
-        }
-        }
+/** Flèches en paysage : groupe fixe ◀ ▶ ▼. */
+@Composable
+fun WideMove(game: Game, t: Theme, scale: Float) {
+    val aw = 76f * scale; val ah = 66f * scale; val gap = 20f * scale; val vgap = 8f * scale
+    Box(Modifier.size((2 * aw + gap).dp, (2 * ah + vgap).dp)) {
+        WoodButton(Kind.LEFT, t, Modifier.size(aw.dp, ah.dp), repeat = true) { game.move(-1) }
+        WoodButton(Kind.RIGHT, t, Modifier.offset((aw + gap).dp, 0.dp).size(aw.dp, ah.dp), repeat = true) { game.move(1) }
+        WoodButton(Kind.DOWN, t, Modifier.offset((aw / 2 + gap / 2).dp, (ah + vgap).dp).size(aw.dp, ah.dp), repeat = true) { game.softDrop() }
     }
 }
 
@@ -538,20 +608,29 @@ enum class Kind { LEFT, RIGHT, DOWN, ROTATE }
 
 /** Boutons « touches » modernes : coins arrondis, dégradé, reflet, ombre portée et chevrons épais. */
 @Composable
-fun WoodButton(kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false, action: () -> Unit) {
+fun WoodButton(
+    kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false, editing: Boolean = false,
+    onDrag: (Float, Float) -> Unit = { _, _ -> }, onDragEnd: () -> Unit = {}, action: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val act by rememberUpdatedState(action)
+    val drag by rememberUpdatedState(onDrag)
+    val dragEnd by rememberUpdatedState(onDragEnd)
     var pressed by remember { mutableStateOf(false) }
     Canvas(
-        modifier.pointerInput(repeat) {
-            detectTapGestures(onPress = {
-                pressed = true
-                act()
-                val job = if (repeat) scope.launch { delay(150); while (true) { act(); delay(45) } } else null
-                tryAwaitRelease()
-                job?.cancel()
-                pressed = false
-            })
+        modifier.pointerInput(repeat, editing) {
+            if (editing) {
+                detectDragGestures(onDragEnd = { dragEnd() }) { change, d -> change.consume(); drag(d.x / density, d.y / density) }
+            } else {
+                detectTapGestures(onPress = {
+                    pressed = true
+                    act()
+                    val job = if (repeat) scope.launch { delay(150); while (true) { act(); delay(45) } } else null
+                    tryAwaitRelease()
+                    job?.cancel()
+                    pressed = false
+                })
+            }
         },
     ) {
         val w = size.width
@@ -565,6 +644,7 @@ fun WoodButton(kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false
         drawRoundRect(Color.Black.copy(alpha = 0.3f), Offset(bx, m * 0.07f), Size(bw, bodyH), corner)
         translate(0f, if (pressed) m * 0.05f else 0f) {
             drawRoundRect(btnBrush(t.btn, pressed), Offset(bx, 0f), Size(bw, bodyH), corner)
+            if (editing) drawRoundRect(Color.White.copy(alpha = 0.9f), Offset(bx - 4f, -4f), Size(bw + 8f, bodyH + 8f), CornerRadius(r + 4f), style = Stroke(5f))
             drawRoundRect(Color.White.copy(alpha = 0.22f), Offset(bx + bw * 0.08f, bodyH * 0.06f), Size(bw * 0.84f, bodyH * 0.38f), CornerRadius(r * 0.8f))
             drawRoundRect(Color.White.copy(alpha = 0.4f), Offset(bx, 0f), Size(bw, bodyH), corner, style = Stroke(m * 0.03f))
             val cx = bx + bw / 2
@@ -597,44 +677,53 @@ fun WoodButton(kind: Kind, t: Theme, modifier: Modifier, repeat: Boolean = false
 }
 
 /**
- * Flèches positionnées librement (en dp) dans la zone des pouces.
- * lshift déplace ◀ vers le bouton de rotation, jusqu'à le toucher ; shift écarte ▶ de ▼.
+ * Zone des pouces : chaque bouton est placé en dp dans la zone. Par défaut, la disposition suit les réglages
+ * (hauteur, taille, décalages) ; une position libre (réglée au doigt) la remplace pour ce bouton.
  */
 @Composable
-fun MoveCluster(game: Game, t: Theme, scale: Float, shift: Float, lshift: Float, mirror: Boolean, w: Float, modifier: Modifier) {
-    val aw = 76f * scale; val ah = 66f * scale; val gap = 20f * scale; val vgap = 8f * scale
-    val base = if (mirror) w - (2 * aw + gap + shift) else 0f
-    val xL = (base + (if (mirror) -lshift else lshift)).coerceIn(0f, maxOf(0f, w - aw))
-    val xR = base + aw + gap + shift
-    val xD = base + aw / 2 + gap / 2
-    Box(modifier.fillMaxWidth().height((2 * ah + vgap).dp)) {
-        WoodButton(Kind.LEFT, t, Modifier.offset(xL.dp, 0.dp).size(aw.dp, ah.dp), repeat = true) { game.move(-1) }
-        WoodButton(Kind.RIGHT, t, Modifier.offset(xR.dp, 0.dp).size(aw.dp, ah.dp), repeat = true) { game.move(1) }
-        WoodButton(Kind.DOWN, t, Modifier.offset(xD.dp, (ah + vgap).dp).size(aw.dp, ah.dp), repeat = true) { game.softDrop() }
+fun ControlsLayer(game: Game, t: Theme, ui: UiPrefs, editing: Boolean, modifier: Modifier) {
+    BoxWithConstraints(modifier) {
+        val w = maxWidth.value
+        val h = maxHeight.value
+        val sc = ui.arrow
+        val aw = 76f * sc; val ah = 66f * sc; val gap = 20f * sc; val vgap = 8f * sc
+        val rot = 116f
+        val base = if (ui.mirror) w - (2 * aw + gap + ui.rshift) else 0f
+        val topY = (h - (2 * ah + vgap)) / 2
+        val xL = (base + (if (ui.mirror) -ui.lshift else ui.lshift)).coerceIn(0f, maxOf(0f, w - aw))
+        PlacedButton(Kind.LEFT, "L", ui, Pair(xL, topY), aw, ah, w, h, true, editing, t) { game.move(-1) }
+        PlacedButton(Kind.RIGHT, "R", ui, Pair(base + aw + gap + ui.rshift, topY), aw, ah, w, h, true, editing, t) { game.move(1) }
+        PlacedButton(Kind.DOWN, "D", ui, Pair(base + aw / 2 + gap / 2, topY + ah + vgap), aw, ah, w, h, true, editing, t) { game.softDrop() }
+        PlacedButton(Kind.ROTATE, "T", ui, Pair(if (ui.mirror) 0f else w - rot, (h - rot) / 2), rot, rot, w, h, false, editing, t) { game.rotate() }
     }
 }
 
 @Composable
-fun RotateButton(game: Game, t: Theme, modifier: Modifier) {
-    WoodButton(Kind.ROTATE, t, modifier.size(116.dp)) { game.rotate() }
+fun PlacedButton(
+    kind: Kind, key: String, ui: UiPrefs, def: Pair<Float, Float>, bw: Float, bh: Float, w: Float, h: Float,
+    repeat: Boolean, editing: Boolean, t: Theme, action: () -> Unit,
+) {
+    val raw = ui.custom[key] ?: def
+    val x = raw.first.coerceIn(0f, maxOf(0f, w - bw))
+    val y = raw.second.coerceIn(0f, maxOf(0f, h - bh))
+    val curX by rememberUpdatedState(x)
+    val curY by rememberUpdatedState(y)
+    WoodButton(
+        kind, t, Modifier.offset(x.dp, y.dp).size(bw.dp, bh.dp), repeat, editing,
+        { dx, dy ->
+            ui.custom = ui.custom + (key to Pair((curX + dx).coerceIn(0f, maxOf(0f, w - bw)), (curY + dy).coerceIn(0f, maxOf(0f, h - bh))))
+        },
+        { ui.commit() },
+        action,
+    )
 }
 
 // ---------- menu de réglages ----------
 
 @Composable
-fun SettingsPanel(
-    t: Theme,
-    lift: Float, onLift: (Float) -> Unit, onLiftDone: () -> Unit,
-    mirror: Boolean, onMirror: (Boolean) -> Unit,
-    themeIdx: Int, onTheme: (Int) -> Unit,
-    style: Int, onStyle: (Int) -> Unit,
-    arrow: Float, onArrow: (Float) -> Unit, onArrowDone: () -> Unit,
-    rshift: Float, onRshift: (Float) -> Unit, onRshiftDone: () -> Unit,
-    lshift: Float, onLshift: (Float) -> Unit, onLshiftDone: () -> Unit,
-    onClose: () -> Unit,
-) {
+fun SettingsPanel(t: Theme, ui: UiPrefs, game: Game, canPlace: Boolean, onEditButtons: () -> Unit, onClose: () -> Unit) {
     // Le panneau reste en haut : on voit les boutons bouger en bas pendant le réglage.
-    val maxL = (LocalConfiguration.current.screenWidthDp - 24f - 116f - 8f - 76f * arrow).coerceAtLeast(1f)
+    val maxL = (LocalConfiguration.current.screenWidthDp - 24f - 116f - 8f - 76f * ui.arrow).coerceAtLeast(1f)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         Column(
             Modifier.statusBarsPadding().padding(12.dp).fillMaxWidth().heightIn(max = maxHeight * 0.62f)
@@ -643,23 +732,55 @@ fun SettingsPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("RÉGLAGES", color = t.accent, fontSize = 24.sp, fontWeight = FontWeight.Black)
-            SettingSlider("Hauteur des boutons : " + lift.toInt() + " dp depuis le bas", lift, 0f..140f, t, onLift, onLiftDone)
-            SettingSlider("Taille des flèches : " + (arrow * 100).toInt() + " %", arrow, 0.7f..1.5f, t, onArrow, onArrowDone)
-            SettingSlider("Flèche gauche, vers le bouton de rotation : " + lshift.toInt() + " dp", lshift.coerceIn(0f, maxL), 0f..maxL, t, onLshift, onLshiftDone)
-            SettingSlider("Décalage de la flèche droite : " + rshift.toInt() + " dp", rshift, 0f..160f, t, onRshift, onRshiftDone)
+
+            Header("SON ET VIBRATIONS", t)
+            SettingSlider("Musique : " + (ui.musicVol * 100).toInt() + " %", ui.musicVol, 0f..1f, t, { ui.musicVol = it }, { ui.commit() })
+            SettingSlider("Effets sonores : " + (ui.sfxVol * 100).toInt() + " %", ui.sfxVol, 0f..1f, t, { ui.sfxVol = it }, { ui.commit() })
+            SwitchRow("Vibrations", ui.vib, t) { ui.vib = it; ui.commit() }
+
+            Header("BOUTONS", t)
+            SettingSlider("Hauteur des boutons : " + ui.lift.toInt() + " dp depuis le bas", ui.lift, 0f..140f, t, { ui.lift = it }, { ui.commit() })
+            SettingSlider("Taille des flèches : " + (ui.arrow * 100).toInt() + " %", ui.arrow, 0.7f..1.5f, t, { ui.arrow = it }, { ui.commit() })
+            SettingSlider("Flèche gauche, vers le bouton de rotation : " + ui.lshift.toInt() + " dp", ui.lshift.coerceIn(0f, maxL), 0f..maxL, t, { ui.lshift = it }, { ui.commit() })
+            SettingSlider("Décalage de la flèche droite : " + ui.rshift.toInt() + " dp", ui.rshift, 0f..160f, t, { ui.rshift = it }, { ui.commit() })
             Label("Disposition", t)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip("Rotation à droite", !mirror, t) { onMirror(false) }
-                Chip("Inversé", mirror, t) { onMirror(true) }
+                Chip("Rotation à droite", !ui.mirror, t) { ui.mirror = false; ui.commit() }
+                Chip("Inversé", ui.mirror, t) { ui.mirror = true; ui.commit() }
             }
+            if (canPlace) {
+                Button(
+                    onClick = onEditButtons, modifier = Modifier.fillMaxWidth().height(46.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                ) { Text("PLACER LES BOUTONS AU DOIGT", fontWeight = FontWeight.Bold) }
+                if (ui.custom.isNotEmpty()) {
+                    Button(
+                        onClick = { ui.custom = emptyMap(); ui.commit() }, modifier = Modifier.fillMaxWidth().height(42.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                    ) { Text("Rétablir la disposition automatique") }
+                }
+            }
+            SwitchRow("Rotation automatique de l'écran", ui.autoRotate, t) { ui.autoRotate = it; ui.commit() }
+
+            Header("APPARENCE", t)
             Label("Thème", t)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                THEMES.forEachIndexed { i, th -> Chip(th.name, i == themeIdx, t) { onTheme(i) } }
+                THEMES.forEachIndexed { i, th -> Chip(th.name, i == ui.themeIdx, t) { ui.themeIdx = i; ui.commit() } }
             }
             Label("Style des pièces", t)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                STYLES.forEachIndexed { i, name -> StyleTile(name, i, i == style, t) { onStyle(i) } }
+                STYLES.forEachIndexed { i, name -> StyleTile(name, i, i == ui.style, t) { ui.style = i; ui.commit() } }
             }
+
+            Header("MODE CHAOS : ÉVÉNEMENTS ACTIVÉS", t)
+            val names = listOf("Vitesse ×3", "Commandes inversées", "Rotation bloquée", "Pièce fantôme", "Barre magique", "Bombe")
+            names.forEachIndexed { id, name -> SwitchRow(name, id in game.chaosOn, t) { game.setChaosOn(id, it) } }
+
+            Header("MODE DUEL : ORDINATEUR", t)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Facile", "Normal", "Difficile").forEachIndexed { i, name -> Chip(name, game.duelLevel == i, t) { game.setDuelLevel(i) } }
+            }
+
             Button(
                 onClick = onClose, modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board),
@@ -704,20 +825,32 @@ fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<F
 // ---------- écran de sélection du mode ----------
 
 @Composable
-fun ModeSelect(game: Game, t: Theme, onPick: (Mode) -> Unit, onSettings: () -> Unit) {
+fun ModeSelect(game: Game, t: Theme, onPick: (Mode) -> Unit, onSettings: () -> Unit, onStats: () -> Unit, onResume: (() -> Unit)?) {
     Column(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("TETRIS", color = t.accent, fontSize = 38.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.CenterHorizontally))
+        Text(APP_TITLE, color = t.accent, fontSize = 34.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.CenterHorizontally))
         Text("Choisissez un mode de jeu", color = t.text.copy(alpha = 0.85f), fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+        if (onResume != null) {
+            Button(
+                onClick = onResume, modifier = Modifier.fillMaxWidth().height(52.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board),
+            ) { Text("REPRENDRE · " + game.saveLabel(), fontWeight = FontWeight.Bold, maxLines = 1) }
+        }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Mode.values().forEach { m -> ModeCard(m, game.recordLabel(m), t) { onPick(m) } }
         }
-        Button(
-            onClick = onSettings, modifier = Modifier.fillMaxWidth().height(48.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
-        ) { Text("RÉGLAGES", fontWeight = FontWeight.Bold) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onSettings, modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+            ) { Text("RÉGLAGES", fontWeight = FontWeight.Bold) }
+            Button(
+                onClick = onStats, modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+            ) { Text("STATISTIQUES", fontWeight = FontWeight.Bold) }
+        }
     }
 }
 
@@ -807,65 +940,5 @@ fun ModeVisual(m: Mode, t: Theme, modifier: Modifier) {
                 drawPath(tri, t.accent)
             }
         }
-    }
-}
-
-// ---------- DESSIN : récapitulatif des tableaux ----------
-
-@Composable
-fun TableauSelect(game: Game, t: Theme, onPlay: (Int) -> Unit, onBack: () -> Unit) {
-    val todo = game.firstTodo()             // le jeu se place sur le premier tableau non validé
-    var sel by remember { mutableIntStateOf(todo) }
-    val gridState = rememberLazyGridState()
-    LaunchedEffect(Unit) { gridState.scrollToItem(maxOf(0, (todo - 1) / 5 - 1) * 5) }
-    Column(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text("DESSIN · TABLEAUX", color = t.accent, fontSize = 26.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.CenterHorizontally))
-        Text(
-            game.picDone.size.toString() + " / " + PICTURES.size + " validés",
-            color = t.text.copy(alpha = 0.85f), fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(5), state = gridState, modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(PICTURES.size) { i ->
-                val n = i + 1
-                TableauTile(n, PICTURES[i], n in game.picDone, n == sel, n <= todo, t) { sel = n }
-            }
-        }
-        Button(
-            onClick = { onPlay(sel) }, modifier = Modifier.fillMaxWidth().height(52.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = t.accent, contentColor = t.board),
-        ) { Text("JOUER LE TABLEAU " + sel, fontWeight = FontWeight.Bold) }
-        Button(
-            onClick = onBack, modifier = Modifier.fillMaxWidth().height(44.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
-        ) { Text("RETOUR", fontWeight = FontWeight.Bold) }
-    }
-}
-
-/** Vignette d'un tableau : aperçu du dessin, numéro, ✓ vert si validé ; grisée tant qu'un tableau précédent n'est pas validé. */
-@Composable
-fun TableauTile(n: Int, pic: List<String>, done: Boolean, selected: Boolean, unlocked: Boolean, t: Theme, onClick: () -> Unit) {
-    val border = if (selected) t.accent else if (done) Color(0xFF4CD964) else t.plaque.copy(alpha = 0.6f)
-    Box(
-        Modifier.aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(t.plaque)
-            .border(if (selected) 3.dp else 1.5.dp, border, RoundedCornerShape(10.dp))
-            .clickable(enabled = unlocked) { onClick() },
-    ) {
-        Canvas(Modifier.fillMaxSize().padding(7.dp).graphicsLayer { alpha = if (unlocked) 1f else 0.3f }) {
-            val s = size.width / 10
-            val top = size.height - pic.size * s
-            pic.forEachIndexed { r, row ->
-                row.forEachIndexed { c, ch ->
-                    if (ch == '#') drawRect(Color(0xFFA8E4FF), Offset(c * s, top + r * s), Size(s * 0.92f, s * 0.92f))
-                }
-            }
-        }
-        Text(n.toString(), color = t.onPlaque, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.TopStart).padding(5.dp))
-        if (done) Text("✓", color = Color(0xFF4CD964), fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.TopEnd).padding(horizontal = 5.dp))
     }
 }
