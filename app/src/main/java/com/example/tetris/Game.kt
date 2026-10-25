@@ -194,7 +194,7 @@ class Game(private val prefs: SharedPreferences) {
         score = 0; lines = 0; hold = -1; banner = ""; fx = null; clearRows = emptyList()
         canRetry = false; result = "GAME OVER"; chain = 0; levelBase = 0
         clearChaos()
-        bag.clear()
+        bag.clear(); eventBag.clear()
         when (m) {
             Mode.PICTURE -> { picture = level.coerceIn(1, PICTURES.size); board = pictureBoard(picture - 1) }
             Mode.PUZZLE -> { if (!retry) picture = 1; loadPuzzle() }
@@ -239,8 +239,19 @@ class Game(private val prefs: SharedPreferences) {
 
     private fun clearChaos() { evSpeed = false; evReverse = false; evNoRot = false; evGhost = false; chaosLabel = ""; chaosDetail = "" }
 
-    /** CHAOS : -1 = pièce normale (6 chances sur 12) ; 0..5 = événement spécial (1 chance sur 12 chacun). */
-    private fun rollEvent(): Int = (0..11).random().let { if (it < 6) -1 else it - 6 }
+    private var eventBag = mutableListOf<Int>()
+
+    /**
+     * CHAOS : tirage sans remise dans un sac de 12 (6 pièces normales + chacun des 6 événements une fois), mélangé.
+     * -1 = pièce normale ; 0..5 = événement spécial. Garantit 50 % / 50 % et au moins un de chaque événement toutes les 12 pièces.
+     */
+    private fun rollEvent(): Int {
+        if (eventBag.isEmpty()) eventBag = mutableListOf(-1, -1, -1, -1, -1, -1, 0, 1, 2, 3, 4, 5).apply { shuffle() }
+        return eventBag.removeAt(eventBag.lastIndex)
+    }
+
+    /** Pièce revenue de la réserve : 1 chance sur 2 d'avoir un événement, sans bombe. */
+    private fun rollHoldEvent(): Int = if ((0..1).random() == 0) -1 else (0..4).random()
 
     /** Applique l'événement e (0 vitesse, 1 inversé, 2 rotation bloquée, 3 fantôme, 4 barre magique, 5 bombe) ; renvoie le type de pièce lancé. */
     private fun applyEvent(e: Int, t: Int): Int {
@@ -260,7 +271,7 @@ class Game(private val prefs: SharedPreferences) {
     private fun spawn(t: Int, ev: Int = -2) {
         var type = t
         if (mode == Mode.CHAOS) {
-            val e = if (t == 7) 5 else if (ev != -2) ev else rollEvent().let { if (it == 5) -1 else it }
+            val e = if (t == 7) 5 else if (ev != -2) ev else rollHoldEvent()
             type = applyEvent(e, t)
         }
         val p = Piece(type); piece = p; canHold = true; resetTimers(); spawnedAt = timeAcc / 100 * 100
