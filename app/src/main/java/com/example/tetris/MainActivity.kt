@@ -162,7 +162,7 @@ fun TetrisApp() {
                     ) {
                         ControlsLayer(
                             game, t, ui, editing,
-                            Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp + ui.lift.dp),
+                            Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = 6.dp),   // pas de marge en bas : le réglage « lift » ne limite plus le placement libre
                         )
                     }
                 }
@@ -687,16 +687,17 @@ fun ControlsLayer(game: Game, t: Theme, ui: UiPrefs, editing: Boolean, modifier:
     BoxWithConstraints(modifier) {
         val w = maxWidth.value
         val h = maxHeight.value
+        val hAuto = h - ui.lift - 6f   // hauteur utilisée par la disposition automatique (marge du bas = lift + 6)
         val sc = ui.arrow
         val aw = 76f * sc; val ah = 66f * sc; val gap = 20f * sc; val vgap = 8f * sc
         val rot = 116f
         val base = if (ui.mirror) w - (2 * aw + gap + ui.rshift) else 0f
-        val topY = (h - (2 * ah + vgap)) / 2
+        val topY = (hAuto - (2 * ah + vgap)) / 2
         val xL = (base + (if (ui.mirror) -ui.lshift else ui.lshift)).coerceIn(0f, maxOf(0f, w - aw))
         PlacedButton(Kind.LEFT, "L", ui, Pair(xL, topY), aw, ah, w, h, true, editing, t) { game.move(-1) }
         PlacedButton(Kind.RIGHT, "R", ui, Pair(base + aw + gap + ui.rshift, topY), aw, ah, w, h, true, editing, t) { game.move(1) }
         PlacedButton(Kind.DOWN, "D", ui, Pair(base + aw / 2 + gap / 2, topY + ah + vgap), aw, ah, w, h, true, editing, t) { game.softDrop() }
-        PlacedButton(Kind.ROTATE, "T", ui, Pair(if (ui.mirror) 0f else w - rot, (h - rot) / 2), rot, rot, w, h, false, editing, t) { game.rotate() }
+        PlacedButton(Kind.ROTATE, "T", ui, Pair(if (ui.mirror) 0f else w - rot, (hAuto - rot) / 2), rot, rot, w, h, false, editing, t) { game.rotate() }
     }
 }
 
