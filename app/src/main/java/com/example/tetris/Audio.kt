@@ -95,6 +95,7 @@ class Audio(ctx: Context) {
         "win" -> join(listOf(seq(120, 1, 0.3, 72, 76, 79, 84), fade(note(hz(88), 450, 0.4, 1))))
         "mission" -> join(listOf(seq(90, 0, 0.5, 79, 84), note(hz(88), 160, 0.5, 0)))
         "level" -> seq(90, 0, 0.5, 76, 79, 83, 88)
+        "record" -> join(listOf(seq(90, 1, 0.3, 72, 76, 79, 84), seq(90, 1, 0.3, 79, 84, 88, 91), fade(note(hz(96), 500, 0.4, 1))))
         "bomb" -> mix(listOf(fade(note(80.0, 300, 0.7, 0)), fade(note(100.0, 280, 0.5, 3))))
         "event" -> join(listOf(note(hz(81), 60, 0.3, 1), note(hz(74), 90, 0.3, 1)))
         else -> null
@@ -203,7 +204,7 @@ class Audio(ctx: Context) {
             "combo" -> VibrationEffect.createWaveform(longArrayOf(0, 30, 40, 30), -1)
             "bomb" -> VibrationEffect.createOneShot(200, 255)
             "over" -> VibrationEffect.createOneShot(400, 200)
-            "win", "level", "mission" -> VibrationEffect.createWaveform(longArrayOf(0, 60, 60, 120), -1)
+            "win", "level", "mission", "record" -> VibrationEffect.createWaveform(longArrayOf(0, 60, 60, 120), -1)
             else -> null
         } ?: return
         try { v.vibrate(effect) } catch (e: Exception) { }

@@ -56,8 +56,7 @@ class UiPrefs(private val p: SharedPreferences) {
     var lift by mutableFloatStateOf(p.getFloat("lift", 60f))          // décalage des boutons depuis le bas (dp)
     var style by mutableIntStateOf(p.getInt("style", 0).coerceIn(0, STYLES.lastIndex))
     var arrow by mutableFloatStateOf(p.getFloat("arrow", 1f))         // taille des flèches (x1)
-    var rshift by mutableFloatStateOf(p.getFloat("rshift", 0f))       // décalage de la flèche droite (dp)
-    var lshift by mutableFloatStateOf(p.getFloat("lshift", 0f))       // décalage de la flèche gauche vers la rotation (dp)
+    var ghost by mutableStateOf(p.getBoolean("ghost", true))          // true = ombre de la pièce tout en bas (position d'arrivée)
     var musicVol by mutableFloatStateOf(p.getFloat("music_vol", 0.35f))
     var sfxVol by mutableFloatStateOf(p.getFloat("sfx_vol", 0.7f))
     var vib by mutableStateOf(p.getBoolean("vib", true))
@@ -77,12 +76,54 @@ class UiPrefs(private val p: SharedPreferences) {
     fun commit() {
         p.edit()
             .putInt("theme", themeIdx).putBoolean("mirror", mirror).putFloat("lift", lift).putInt("style", style)
-            .putFloat("arrow", arrow).putFloat("rshift", rshift).putFloat("lshift", lshift)
+            .putFloat("arrow", arrow).putBoolean("ghost", ghost)
             .putFloat("music_vol", musicVol).putFloat("sfx_vol", sfxVol).putBoolean("vib", vib).putBoolean("auto_rotate", autoRotate)
             .putString("custom", custom.entries.joinToString(";") { it.key + ":" + it.value.first + "," + it.value.second })
             .apply()
     }
 }
+
+/** Exporte toutes les données du jeu (records, étoiles, statistiques, réglages, partie en cours) en JSON. */
+fun exportPrefs(p: SharedPreferences): String {
+    val root = org.json.JSONObject()
+    root.put("app", "tetris"); root.put("version", 1)
+    val data = org.json.JSONObject()
+    for ((k, v) in p.all) {
+        val o = org.json.JSONObject()
+        when (v) {
+            is Int -> { o.put("t", "i"); o.put("v", v) }
+            is Long -> { o.put("t", "l"); o.put("v", v) }
+            is Float -> { o.put("t", "f"); o.put("v", v.toDouble()) }
+            is Boolean -> { o.put("t", "b"); o.put("v", v) }
+            is String -> { o.put("t", "s"); o.put("v", v) }
+            is Set<*> -> { o.put("t", "set"); o.put("v", org.json.JSONArray(v.map { it.toString() })) }
+            else -> continue
+        }
+        data.put(k, o)
+    }
+    root.put("data", data)
+    return root.toString()
+}
+
+/** Remplace toutes les données par celles d'un export. Renvoie false si le fichier n'est pas valide (rien n'est modifié). */
+fun importPrefs(p: SharedPreferences, json: String): Boolean = try {
+    val root = org.json.JSONObject(json)
+    require(root.getString("app") == "tetris")
+    val data = root.getJSONObject("data")
+    val e = p.edit().clear()
+    for (k in data.keys()) {
+        val o = data.getJSONObject(k)
+        when (o.getString("t")) {
+            "i" -> e.putInt(k, o.getInt("v"))
+            "l" -> e.putLong(k, o.getLong("v"))
+            "f" -> e.putFloat(k, o.getDouble("v").toFloat())
+            "b" -> e.putBoolean(k, o.getBoolean("v"))
+            "s" -> e.putString(k, o.getString("v"))
+            "set" -> e.putStringSet(k, o.getJSONArray("v").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() })
+        }
+    }
+    e.commit()
+} catch (ex: Exception) { false }
 
 @Composable
 fun Header(text: String, t: Theme) {

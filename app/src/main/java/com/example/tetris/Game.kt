@@ -121,6 +121,7 @@ class Game(private val prefs: SharedPreferences) {
     var puzDone by mutableStateOf(loadSet("puz_done", PUZZLES.size))   // PUZZLE : niveaux validés
     var puzStars by mutableStateOf(loadStars("puz_stars"))
     var chaosOn by mutableStateOf(loadChaos())                    // CHAOS : événements activés (0 à 5)
+    var recordFx by mutableIntStateOf(0)        // incrémenté à chaque record battu : déclenche l'animation
     var pack by mutableIntStateOf(prefs.getInt("pack", 0).coerceIn(0, SHAPE_PACKS.lastIndex))   // FORMES : pack de formes choisi
     var duelLevel by mutableIntStateOf(prefs.getInt("duel_lvl", 1).coerceIn(0, 2))   // DUEL : 0 facile, 1 normal, 2 difficile
 
@@ -155,6 +156,8 @@ class Game(private val prefs: SharedPreferences) {
     private var spawnedAt = 0L
     private var botAt = 0L
     private var bot = Bot()
+    private var startBest = 0      // record au début de la partie
+    private var recordDone = true   // true = animation déjà jouée (ou pas de record à battre)
     private var statBuf = 0L        // temps de jeu pas encore écrit dans les statistiques
     private var levelStartAcc = 0L  // DESSIN / PUZZLE : début du niveau en cours (pour les étoiles)
 
@@ -228,6 +231,7 @@ class Game(private val prefs: SharedPreferences) {
     fun start(m: Mode = mode, retry: Boolean = false, level: Int = 1) {
         flushStats()
         mode = m; timeAcc = 0L; timeMs = 0L; levelStartAcc = 0L; loadBest(m)
+        startBest = best; recordDone = best <= 0 || m == Mode.PUZZLE || m == Mode.DUEL
         statAdd("games", 1); statAdd("games_" + m.name, 1)
         score = 0; lines = 0; hold = -1; banner = ""; fx = null; clearRows = emptyList()
         canRetry = false; result = "GAME OVER"; chain = 0; levelBase = 0
@@ -371,6 +375,7 @@ class Game(private val prefs: SharedPreferences) {
             evNoRot = o.getBoolean("evNoRot"); evGhost = o.getBoolean("evGhost")
             chaosLabel = o.getString("chaosLabel"); chaosDetail = o.getString("chaosDetail")
             eventBag = ints(o.getString("eventBag")).toMutableList()
+            startBest = best; recordDone = best <= 0 || score >= best || m == Mode.PUZZLE || m == Mode.DUEL
             banner = ""; fx = null; clearRows = emptyList(); canRetry = false; result = "GAME OVER"; chain = 0
             state = GState.PAUSED
             true
@@ -521,6 +526,7 @@ class Game(private val prefs: SharedPreferences) {
         val shown = timeAcc / 100 * 100
         if (shown != timeMs) timeMs = shown
         if (banner.isNotEmpty() && timeAcc >= bannerUntil) banner = ""
+        if (!recordDone && score > startBest) { recordDone = true; recordFx++; onSfx("record") }
         if (clearRows.isNotEmpty()) { if (now >= clearAt) finishClear(); return }
         when (mode) {
             Mode.SURVIVAL -> if (timeAcc >= garbageAt) {

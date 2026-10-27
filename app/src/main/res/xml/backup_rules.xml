@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sauvegarde automatique Android (Google) : anciennes versions d'Android (≤ 11). -->
+<full-backup-content>
+    <include domain="sharedpref" path="tetris.xml" />
+</full-backup-content>

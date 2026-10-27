@@ -5,8 +5,11 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
@@ -40,6 +43,7 @@ import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -146,14 +150,14 @@ fun TetrisApp() {
                     Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.BottomCenter) {
                         if (!ui.mirror) WideMove(game, t, ui.arrow) else WoodButton(Kind.ROTATE, t, Modifier.size(116.dp)) { game.rotate() }
                     }
-                    GameArea(game, t, ui.style, Modifier.weight(2.4f).fillMaxHeight())
+                    GameArea(game, t, ui.style, ui.ghost, Modifier.weight(2.4f).fillMaxHeight())
                     Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.BottomCenter) {
                         if (!ui.mirror) WoodButton(Kind.ROTATE, t, Modifier.size(116.dp)) { game.rotate() } else WideMove(game, t, ui.arrow)
                     }
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    GameArea(game, t, ui.style, Modifier.weight(1f).fillMaxWidth().statusBarsPadding().padding(8.dp))
+                    GameArea(game, t, ui.style, ui.ghost, Modifier.weight(1f).fillMaxWidth().statusBarsPadding().padding(8.dp))
                     // ---- zone des pouces ----
                     Box(
                         Modifier.fillMaxWidth()
@@ -246,7 +250,7 @@ fun TetrisApp() {
 
 /** Plateau et cadres d'information (même présentation en portrait et en paysage). */
 @Composable
-fun GameArea(game: Game, t: Theme, style: Int, modifier: Modifier) {
+fun GameArea(game: Game, t: Theme, style: Int, showGhost: Boolean, modifier: Modifier) {
     Row(
         modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -266,7 +270,7 @@ fun GameArea(game: Game, t: Theme, style: Int, modifier: Modifier) {
                             )
                         }
                     }
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopStart) { BoardView(game, t, style) }
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopStart) { BoardView(game, t, style, showGhost) }
                 }
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -473,8 +477,31 @@ private fun DrawScope.clearEffect(f: ClearFx, ph: Float, s: Float, t: Theme) {
     }
 }
 
+/** Pluie de confettis et halo doré quand un record est battu (p : 0 → 1). */
+private fun DrawScope.recordEffect(p: Float, w: Float, h: Float, t: Theme) {
+    val fade = 1f - maxOf(0f, (p - 0.75f) / 0.25f)
+    drawRect(Color(0xFFFFD54F).copy(alpha = 0.28f * fade * (1f - p)), Offset.Zero, Size(w, h))
+    drawRect(Color(0xFFFFD54F).copy(alpha = 0.9f * fade), Offset.Zero, Size(w, h), style = Stroke(8f * (1f - p) + 2f))
+    val cols = RAINBOW + t.pieces
+    for (i in 0 until 60) {
+        val seed = i * 7919L % 1000L / 1000f          // « hasard » stable pour chaque confetti
+        val seed2 = i * 104729L % 1000L / 1000f
+        val delay = seed2 * 0.35f
+        val q = ((p - delay) / (1f - delay)).coerceIn(0f, 1f)
+        if (q <= 0f) continue
+        val x = seed * w + sin(q * 9f + i) * w * 0.04f
+        val y = -20f + q * (h + 40f) * (0.7f + 0.6f * seed2)
+        val sz = w * (0.018f + 0.02f * seed2)
+        translate(x, y) {
+            rotate(q * 540f * (if (i % 2 == 0) 1f else -1f)) {
+                drawRect(cols[i % cols.size].copy(alpha = fade), Offset(-sz, -sz / 2), Size(sz * 2, sz))
+            }
+        }
+    }
+}
+
 @Composable
-fun BoardView(game: Game, t: Theme, style: Int) {
+fun BoardView(game: Game, t: Theme, style: Int, showGhost: Boolean) {
     val fx = game.fx
     var prog by remember { mutableFloatStateOf(1f) }
     var pulse by remember { mutableFloatStateOf(0f) }   // 0..1, pour le halo des blocs à effacer
@@ -483,6 +510,17 @@ fun BoardView(game: Game, t: Theme, style: Int) {
             while (true) {
                 val tNs = withFrameNanos { it }
                 pulse = ((sin(tNs / 1_000_000_000.0 * 2.6) + 1.0) / 2.0).toFloat()
+            }
+        }
+    }
+    var rec by remember { mutableFloatStateOf(1f) }   // animation « nouveau record » : 0 → 1 en 3 s
+    LaunchedEffect(game.recordFx) {
+        if (game.recordFx > 0) {
+            rec = 0f
+            val start = withFrameNanos { it }
+            while (rec < 1f) {
+                val now = withFrameNanos { it }
+                rec = ((now - start) / 1_000_000f / 3000f).coerceAtMost(1f)
             }
         }
     }
@@ -521,7 +559,7 @@ fun BoardView(game: Game, t: Theme, style: Int) {
             }
             for (i in b.indices) if (b[i] == 9) pictureCell((i % COLS) * s, (i / COLS) * s, s, pulse)
             val pa = game.pieceAlpha()   // pièce fantôme : clignote puis disparaît (ombre de visée comprise)
-            if (pa > 0f) game.ghost()?.let { g ->
+            if (showGhost && pa > 0f) game.ghost()?.let { g ->
                 val gc = typeColor(t, g.type)
                 g.cells.forEach { (x, y) -> if (y >= 0) cellAt(x * s, y * s, s, gc, 0.25f, style) }
             }
@@ -532,6 +570,7 @@ fun BoardView(game: Game, t: Theme, style: Int) {
             }
             val f = game.fx
             if (f != null && prog < 1f) clearEffect(f, prog, s, t)
+            if (rec < 1f) recordEffect(rec, size.width, size.height, t)
         }
         val f2 = game.fx
         if (f2 != null && f2.count >= 2 && prog < 1f) {
@@ -543,6 +582,17 @@ fun BoardView(game: Game, t: Theme, style: Int) {
                     scaleX = sc; scaleY = sc
                     alpha = 1f - maxOf(0f, (prog - 0.7f) / 0.3f)
                 },
+            )
+        }
+        if (rec < 1f) {
+            Text(
+                "NOUVEAU RECORD !", color = Color(0xFFFFD54F), fontSize = 26.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.Center).graphicsLayer {
+                    val sc = if (rec < 0.15f) 0.3f + rec / 0.15f * 0.9f else 1.2f - 0.2f * minOf(1f, (rec - 0.15f) / 0.15f) + 0.04f * sin(rec * 40f)
+                    scaleX = sc; scaleY = sc
+                    rotationZ = sin(rec * 18f) * 4f * (1f - rec)
+                    alpha = 1f - maxOf(0f, (rec - 0.8f) / 0.2f)
+                }.clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
         if (game.banner.isNotEmpty()) {
@@ -691,11 +741,10 @@ fun ControlsLayer(game: Game, t: Theme, ui: UiPrefs, editing: Boolean, modifier:
         val sc = ui.arrow
         val aw = 76f * sc; val ah = 66f * sc; val gap = 20f * sc; val vgap = 8f * sc
         val rot = 116f
-        val base = if (ui.mirror) w - (2 * aw + gap + ui.rshift) else 0f
+        val base = if (ui.mirror) w - (2 * aw + gap) else 0f
         val topY = (hAuto - (2 * ah + vgap)) / 2
-        val xL = (base + (if (ui.mirror) -ui.lshift else ui.lshift)).coerceIn(0f, maxOf(0f, w - aw))
-        PlacedButton(Kind.LEFT, "L", ui, Pair(xL, topY), aw, ah, w, h, true, editing, t) { game.move(-1) }
-        PlacedButton(Kind.RIGHT, "R", ui, Pair(base + aw + gap + ui.rshift, topY), aw, ah, w, h, true, editing, t) { game.move(1) }
+        PlacedButton(Kind.LEFT, "L", ui, Pair(base, topY), aw, ah, w, h, true, editing, t) { game.move(-1) }
+        PlacedButton(Kind.RIGHT, "R", ui, Pair(base + aw + gap, topY), aw, ah, w, h, true, editing, t) { game.move(1) }
         PlacedButton(Kind.DOWN, "D", ui, Pair(base + aw / 2 + gap / 2, topY + ah + vgap), aw, ah, w, h, true, editing, t) { game.softDrop() }
         PlacedButton(Kind.ROTATE, "T", ui, Pair(if (ui.mirror) 0f else w - rot, (hAuto - rot) / 2), rot, rot, w, h, false, editing, t) { game.rotate() }
     }
@@ -726,7 +775,27 @@ fun PlacedButton(
 @Composable
 fun SettingsPanel(t: Theme, ui: UiPrefs, game: Game, canPlace: Boolean, onEditButtons: () -> Unit, onClose: () -> Unit) {
     // Le panneau reste en haut : on voit les boutons bouger en bas pendant le réglage.
-    val maxL = (LocalConfiguration.current.screenWidthDp - 24f - 116f - 8f - 76f * ui.arrow).coerceAtLeast(1f)
+    val ctx = LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences("tetris", Context.MODE_PRIVATE) }
+    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            game.saveGame()
+            val ok = try {
+                ctx.contentResolver.openOutputStream(uri)?.use { it.write(exportPrefs(prefs).toByteArray(Charsets.UTF_8)) } != null
+            } catch (e: Exception) { false }
+            Toast.makeText(ctx, if (ok) "Sauvegarde enregistrée" else "Échec de la sauvegarde", Toast.LENGTH_LONG).show()
+        }
+    }
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val ok = try {
+                val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                text != null && importPrefs(prefs, text)
+            } catch (e: Exception) { false }
+            Toast.makeText(ctx, if (ok) "Données restaurées" else "Fichier de sauvegarde invalide", Toast.LENGTH_LONG).show()
+            if (ok) (ctx as? Activity)?.recreate()   // recharge le jeu avec les données restaurées
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         Column(
             Modifier.statusBarsPadding().padding(12.dp).fillMaxWidth().heightIn(max = maxHeight * 0.62f)
@@ -744,8 +813,6 @@ fun SettingsPanel(t: Theme, ui: UiPrefs, game: Game, canPlace: Boolean, onEditBu
             Header("BOUTONS", t)
             SettingSlider("Hauteur des boutons : " + ui.lift.toInt() + " dp depuis le bas", ui.lift, 0f..140f, t, { ui.lift = it }, { ui.commit() })
             SettingSlider("Taille des flèches : " + (ui.arrow * 100).toInt() + " %", ui.arrow, 0.7f..1.5f, t, { ui.arrow = it }, { ui.commit() })
-            SettingSlider("Flèche gauche, vers le bouton de rotation : " + ui.lshift.toInt() + " dp", ui.lshift.coerceIn(0f, maxL), 0f..maxL, t, { ui.lshift = it }, { ui.commit() })
-            SettingSlider("Décalage de la flèche droite : " + ui.rshift.toInt() + " dp", ui.rshift, 0f..160f, t, { ui.rshift = it }, { ui.commit() })
             Label("Disposition", t)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("Rotation à droite", !ui.mirror, t) { ui.mirror = false; ui.commit() }
@@ -770,6 +837,7 @@ fun SettingsPanel(t: Theme, ui: UiPrefs, game: Game, canPlace: Boolean, onEditBu
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 THEMES.forEachIndexed { i, th -> Chip(th.name, i == ui.themeIdx, t) { ui.themeIdx = i; ui.commit() } }
             }
+            SwitchRow("Ombre de la pièce tout en bas (position d'arrivée)", ui.ghost, t) { ui.ghost = it; ui.commit() }
             Label("Style des pièces", t)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 STYLES.forEachIndexed { i, name -> StyleTile(name, i, i == ui.style, t) { ui.style = i; ui.commit() } }
@@ -782,6 +850,19 @@ fun SettingsPanel(t: Theme, ui: UiPrefs, game: Game, canPlace: Boolean, onEditBu
             Header("MODE DUEL : ORDINATEUR", t)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("Facile", "Normal", "Difficile").forEachIndexed { i, name -> Chip(name, game.duelLevel == i, t) { game.changeDuelLevel(i) } }
+            }
+
+            Header("SAUVEGARDE DES DONNÉES", t)
+            Label("Records, étoiles, statistiques, réglages et partie en cours. Enregistrez le fichier dans votre Drive ou sur votre téléphone avant de désinstaller, puis restaurez-le après la réinstallation.", t)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { exporter.launch("tetris-sauvegarde.json") }, modifier = Modifier.weight(1f).height(46.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                ) { Text("SAUVEGARDER", fontWeight = FontWeight.Bold) }
+                Button(
+                    onClick = { importer.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*")) }, modifier = Modifier.weight(1f).height(46.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = t.plaque, contentColor = t.onPlaque),
+                ) { Text("RESTAURER", fontWeight = FontWeight.Bold) }
             }
 
             Button(
