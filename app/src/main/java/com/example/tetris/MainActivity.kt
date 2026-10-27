@@ -514,8 +514,9 @@ fun BoardView(game: Game, t: Theme, style: Int, showGhost: Boolean) {
         }
     }
     var rec by remember { mutableFloatStateOf(1f) }   // animation « nouveau record » : 0 → 1 en 3 s
+    val recSeen = remember { game.recordFx }   // compteur déjà vu à l'ouverture du plateau : on ne rejoue pas l'animation d'une partie précédente
     LaunchedEffect(game.recordFx) {
-        if (game.recordFx > 0) {
+        if (game.recordFx != recSeen) {
             rec = 0f
             val start = withFrameNanos { it }
             while (rec < 1f) {
