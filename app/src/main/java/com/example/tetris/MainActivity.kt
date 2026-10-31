@@ -102,7 +102,7 @@ fun TetrisApp() {
     }
     LaunchedEffect(game.state) {
         while (game.state == GState.PLAYING) {
-            delay(25)
+            withFrameNanos { }  // attend le prochain vsync (~16 ms) au lieu de delay(25) irrégulier
             game.tick(SystemClock.uptimeMillis())
         }
     }
